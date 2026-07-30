@@ -1,11 +1,11 @@
 import { createGalleryPage } from '../gallery/gallery.js';
 
-function field(labelText, input) {
+function field(labelText, control) {
   const label = document.createElement('label');
   label.className = 'stia-field';
   const text = document.createElement('span');
   text.textContent = labelText;
-  label.append(text, input);
+  label.append(text, control);
   return label;
 }
 
@@ -15,7 +15,7 @@ function input(type = 'text') {
   return element;
 }
 
-function select(options) {
+function select(options = []) {
   const element = document.createElement('select');
   for (const [value, label] of options) {
     const option = document.createElement('option');
@@ -74,15 +74,20 @@ export function createToolPanel({ api, store }) {
     ['server', 'Server Plugin 增强模式'],
   ]);
   const allowHttp = input('checkbox');
+  const presetSelector = select();
+  presetSelector.setAttribute('aria-label', '选择 API 预设');
+  const presetName = input();
+  presetName.placeholder = '例如：主站 API、备用 API';
   const baseUrl = input('url');
   baseUrl.placeholder = 'https://api.example.com';
   const apiKey = input('password');
-  apiKey.placeholder = '留空则保留现有密钥';
+  apiKey.placeholder = '留空则保留当前预设的密钥';
   apiKey.autocomplete = 'new-password';
-  const model = input('text');
-  model.setAttribute('list', 'stia-model-list');
-  const modelList = document.createElement('datalist');
-  modelList.id = 'stia-model-list';
+  const model = select([['', '请先拉取模型']]);
+  const modelsPath = input();
+  modelsPath.placeholder = '/v1/models';
+  const generationPath = input();
+  generationPath.placeholder = '/v1/images/generations';
   const defaultSize = input();
   const defaultQuality = input();
   const defaultCount = input('number');
@@ -102,13 +107,19 @@ export function createToolPanel({ api, store }) {
   status.setAttribute('role', 'status');
   const urlPreview = document.createElement('code');
   urlPreview.className = 'stia-url-preview';
+  let presets = [];
+  let activePresetId = '';
 
   function normalizePreview() {
     try {
       const url = new URL(baseUrl.value);
       const baseParts = url.pathname.split('/').filter(Boolean);
-      const route = ['v1', 'images', 'generations'];
-      if (baseParts.at(-1)?.toLowerCase() === 'v1') route.shift();
+      const route = String(generationPath.value || '/v1/images/generations')
+        .split('/')
+        .filter(Boolean);
+      if (baseParts.at(-1)?.toLowerCase() === 'v1' && route[0]?.toLowerCase() === 'v1') {
+        route.shift();
+      }
       url.pathname = `/${[...baseParts, ...route].join('/')}`;
       urlPreview.textContent = url.toString();
     } catch {
@@ -116,68 +127,7 @@ export function createToolPanel({ api, store }) {
     }
   }
   baseUrl.addEventListener('input', normalizePreview);
-
-  const basic = document.createElement('div');
-  basic.className = 'stia-form-grid';
-  const enabledField = field('启用扩展', enabled);
-  enabledField.classList.add('stia-field--check');
-  const autoField = field('自动生图（仅新完成消息）', autoGenerate);
-  autoField.classList.add('stia-field--check');
-  basic.append(
-    enabledField,
-    autoField,
-    field('运行模式', executionMode),
-    field('Base URL', baseUrl),
-    field('API Key', apiKey),
-    field('模型', model),
-    field('默认尺寸', defaultSize),
-    field('默认质量', defaultQuality),
-    field('默认数量', defaultCount),
-  );
-
-  const warning = document.createElement('p');
-  warning.className = 'stia-warning';
-  warning.textContent = '免服务端模式会从浏览器直连 API，API Key 保存在当前酒馆账户的前端存储中；中转站必须允许 CORS。允许 HTTP 仅适合受信任的本地服务。';
-  const advanced = document.createElement('details');
-  const advancedSummary = document.createElement('summary');
-  advancedSummary.textContent = '高级设置';
-  const advancedGrid = document.createElement('div');
-  advancedGrid.className = 'stia-form-grid';
-  for (const [labelText, control] of [
-    ['允许 HTTP', allowHttp],
-    ['发送 size', sendSize],
-    ['发送 quality', sendQuality],
-    ['发送 n', sendN],
-  ]) {
-    const item = field(labelText, control);
-    item.classList.add('stia-field--check');
-    advancedGrid.append(item);
-  }
-  advancedGrid.append(field('超时（秒）', timeout), field('额外请求参数 JSON', extraBody), warning);
-  advanced.append(advancedSummary, advancedGrid);
-
-  const actions = document.createElement('div');
-  actions.className = 'stia-actions';
-  const save = action('保存设置', saveSettings, true);
-  const fetchModels = action('拉取模型', async () => run(fetchModels, async () => {
-    const result = await api.listModels();
-    updateModelList(result.models);
-    status.textContent = `已拉取 ${result.models.length} 个模型`;
-  }));
-  const test = action('测试连接', async () => run(test, async () => {
-    const result = await api.testPreset();
-    status.textContent = `连接成功，共发现 ${result.modelCount} 个模型`;
-  }));
-  const clearKey = action('清除密钥', async () => {
-    if (!confirm('确定清除已保存的 API Key 吗？')) return;
-    await run(clearKey, async () => {
-      await api.clearSecret();
-      apiKey.placeholder = '尚未保存密钥';
-      status.textContent = '密钥已清除';
-    });
-  });
-  actions.append(save, fetchModels, test, clearKey);
-  settingsPage.append(basic, urlPreview, advanced, actions, status);
+  generationPath.addEventListener('input', normalizePreview);
 
   async function run(control, operation) {
     control.disabled = true;
@@ -193,44 +143,260 @@ export function createToolPanel({ api, store }) {
     }
   }
 
-  function updateModelList(models) {
-    modelList.replaceChildren();
-    for (const item of models || []) {
+  function updateModelList(models, selectedValue = '') {
+    const values = (models || []).map(item => item.id).filter(Boolean);
+    if (selectedValue && !values.includes(selectedValue)) values.unshift(selectedValue);
+    model.replaceChildren();
+    if (!values.length) {
       const option = document.createElement('option');
-      option.value = item.id;
-      modelList.append(option);
+      option.value = '';
+      option.textContent = '请先拉取模型';
+      model.append(option);
+      return;
+    }
+    for (const value of values) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value === selectedValue && !(models || []).some(item => item.id === value)
+        ? `${value}（已保存）`
+        : value;
+      model.append(option);
+    }
+    model.value = selectedValue && values.includes(selectedValue) ? selectedValue : values[0];
+  }
+
+  function loadPresetFields(preset) {
+    if (!preset) return;
+    activePresetId = preset.id;
+    presetSelector.value = preset.id;
+    presetName.value = preset.name || '';
+    baseUrl.value = preset.baseUrl || '';
+    modelsPath.value = preset.modelsPath || '/v1/models';
+    generationPath.value = preset.generationPath || '/v1/images/generations';
+    defaultSize.value = preset.defaultSize || '1024x1024';
+    defaultQuality.value = preset.defaultQuality || 'auto';
+    defaultCount.value = String(preset.defaultCount || 1);
+    timeout.value = String(Math.round((preset.timeoutMs || 180000) / 1000));
+    extraBody.value = JSON.stringify(preset.extraBody || {}, null, 2);
+    sendSize.checked = preset.sendSize !== false;
+    sendQuality.checked = preset.sendQuality !== false;
+    sendN.checked = preset.sendN !== false;
+    apiKey.value = '';
+    apiKey.placeholder = preset.hasApiKey
+      ? `当前预设已保存：${preset.apiKeyMask}`
+      : '当前预设尚未保存密钥';
+    updateModelList(preset.cachedModels, preset.selectedModel);
+    normalizePreview();
+  }
+
+  function updatePresetSelector(activeId = activePresetId) {
+    presetSelector.replaceChildren();
+    for (const preset of presets) {
+      const option = document.createElement('option');
+      option.value = preset.id;
+      option.textContent = preset.name;
+      presetSelector.append(option);
+    }
+    presetSelector.value = activeId;
+  }
+
+  function parseExtraBody() {
+    try {
+      return extraBody.value.trim() ? JSON.parse(extraBody.value) : {};
+    } catch {
+      throw new Error('额外请求参数不是有效 JSON');
     }
   }
 
+  async function saveCurrentPreset(presetId = activePresetId) {
+    if (!presetId) throw new Error('没有可保存的 API 预设');
+    const preset = await api.updatePreset(presetId, {
+      name: presetName.value.trim() || '未命名预设',
+      baseUrl: baseUrl.value.trim(),
+      apiKey: apiKey.value,
+      modelsPath: modelsPath.value.trim() || '/v1/models',
+      generationPath: generationPath.value.trim() || '/v1/images/generations',
+      selectedModel: model.value,
+      defaultSize: defaultSize.value,
+      defaultQuality: defaultQuality.value,
+      defaultCount: Number(defaultCount.value),
+      timeoutMs: Number(timeout.value) * 1000,
+      sendSize: sendSize.checked,
+      sendQuality: sendQuality.checked,
+      sendN: sendN.checked,
+      extraBody: parseExtraBody(),
+    });
+    apiKey.value = '';
+    apiKey.placeholder = preset.hasApiKey
+      ? `当前预设已保存：${preset.apiKeyMask}`
+      : '当前预设尚未保存密钥';
+    const index = presets.findIndex(item => item.id === preset.id);
+    if (index >= 0) presets[index] = preset;
+    else presets.push(preset);
+    updatePresetSelector(preset.id);
+    return preset;
+  }
+
+  const fetchModels = action('拉取模型', async () => run(fetchModels, async () => {
+    let preset = await saveCurrentPreset();
+    const result = await api.listModels(activePresetId);
+    updateModelList(result.models, preset.selectedModel);
+    if (!model.value && result.models[0]?.id) model.value = result.models[0].id;
+    preset = await api.updatePreset(activePresetId, { selectedModel: model.value });
+    const index = presets.findIndex(item => item.id === preset.id);
+    if (index >= 0) presets[index] = { ...preset, cachedModels: result.models };
+    store.set({ preset });
+    status.textContent = `已拉取 ${result.models.length} 个模型，请在左侧下拉框选择`;
+  }));
+
+  const modelRow = document.createElement('div');
+  modelRow.className = 'stia-inline-control';
+  modelRow.append(model, fetchModels);
+
+  const createPreset = action('新建', async () => {
+    const name = window.prompt('给这个 API 预设起个名字', '新预设');
+    if (name == null) return;
+    await run(createPreset, async () => {
+      if (activePresetId) await saveCurrentPreset();
+      const preset = await api.createPreset({ name: name.trim() || '新预设' });
+      presets.push(preset);
+      activePresetId = preset.id;
+      updatePresetSelector(preset.id);
+      loadPresetFields(preset);
+      store.set({ preset });
+      status.textContent = `已新建预设“${preset.name}”`;
+    });
+  });
+
+  const deletePreset = action('删除', async () => {
+    const current = presets.find(item => item.id === activePresetId);
+    if (!current || !confirm(`确定删除 API 预设“${current.name}”吗？`)) return;
+    await run(deletePreset, async () => {
+      const result = await api.deletePreset(activePresetId);
+      presets = presets.filter(item => item.id !== activePresetId);
+      const preset = result.activePreset;
+      activePresetId = preset.id;
+      updatePresetSelector(preset.id);
+      loadPresetFields(preset);
+      store.set({ preset });
+      status.textContent = '预设已删除';
+    });
+  });
+  deletePreset.classList.add('stia-button--danger');
+
+  const presetRow = document.createElement('div');
+  presetRow.className = 'stia-inline-control';
+  presetRow.append(presetSelector, createPreset, deletePreset);
+
+  presetSelector.addEventListener('change', async () => {
+    const nextId = presetSelector.value;
+    const previousId = activePresetId;
+    if (!nextId || nextId === previousId) return;
+    await run(presetSelector, async () => {
+      await saveCurrentPreset(previousId);
+      const selected = await api.selectPreset(nextId);
+      activePresetId = selected.id;
+      const local = presets.find(item => item.id === selected.id);
+      const preset = { ...local, ...selected };
+      loadPresetFields(preset);
+      store.set({ preset });
+      status.textContent = `已切换到“${preset.name}”`;
+    });
+    if (activePresetId === previousId) presetSelector.value = previousId;
+  });
+
+  const basic = document.createElement('div');
+  basic.className = 'stia-form-grid';
+  const enabledField = field('启用扩展', enabled);
+  enabledField.classList.add('stia-field--check');
+  const autoField = field('自动生图（仅新完成消息）', autoGenerate);
+  autoField.classList.add('stia-field--check');
+  const presetField = field('API 预设', presetRow);
+  presetField.classList.add('stia-field--wide');
+  basic.append(
+    enabledField,
+    autoField,
+    field('运行模式', executionMode),
+    presetField,
+    field('预设名称', presetName),
+    field('Base URL', baseUrl),
+    field('API Key', apiKey),
+    field('模型', modelRow),
+    field('默认尺寸', defaultSize),
+    field('默认质量', defaultQuality),
+    field('默认数量', defaultCount),
+  );
+
+  const warning = document.createElement('p');
+  warning.className = 'stia-warning';
+  warning.textContent = '免服务端模式会从浏览器直连 API；每个预设的 API Key 独立保存在当前酒馆账户的前端存储中。中转站必须允许 CORS。允许 HTTP 仅适合受信任的本地服务。';
+  const advanced = document.createElement('details');
+  const advancedSummary = document.createElement('summary');
+  advancedSummary.textContent = '高级设置';
+  const advancedGrid = document.createElement('div');
+  advancedGrid.className = 'stia-form-grid';
+  for (const [labelText, control] of [
+    ['允许 HTTP', allowHttp],
+    ['发送 size', sendSize],
+    ['发送 quality', sendQuality],
+    ['发送 n', sendN],
+  ]) {
+    const item = field(labelText, control);
+    item.classList.add('stia-field--check');
+    advancedGrid.append(item);
+  }
+  advancedGrid.append(
+    field('模型列表路径', modelsPath),
+    field('生图路径', generationPath),
+    field('超时（秒）', timeout),
+    field('额外请求参数 JSON', extraBody),
+    warning,
+  );
+  advanced.append(advancedSummary, advancedGrid);
+
+  const actions = document.createElement('div');
+  actions.className = 'stia-actions';
+  const save = action('保存预设', saveSettings, true);
+  const test = action('测试模型接口', async () => run(test, async () => {
+    const preset = await saveCurrentPreset();
+    const result = await api.testPreset(preset.id);
+    store.set({ preset });
+    status.textContent = `模型接口连接成功，共发现 ${result.modelCount} 个模型；生图接口会在实际生成时单独验证`;
+  }));
+  const clearKey = action('清除当前预设密钥', async () => {
+    if (!confirm('确定清除当前 API 预设保存的密钥吗？')) return;
+    await run(clearKey, async () => {
+      await api.clearSecret(activePresetId);
+      const current = presets.find(item => item.id === activePresetId);
+      if (current) Object.assign(current, { hasApiKey: false, apiKeyMask: '' });
+      apiKey.value = '';
+      apiKey.placeholder = '当前预设尚未保存密钥';
+      status.textContent = '当前预设的密钥已清除';
+    });
+  });
+  actions.append(save, test, clearKey);
+  settingsPage.append(basic, urlPreview, advanced, actions, status);
+
   async function saveSettings() {
     await run(save, async () => {
-      let parsedExtra;
-      try {
-        parsedExtra = extraBody.value.trim() ? JSON.parse(extraBody.value) : {};
-      } catch {
-        throw new Error('额外请求参数不是有效 JSON');
-      }
+      const previousMode = api.mode();
+      const requestedMode = executionMode.value;
+      let preset = await saveCurrentPreset();
       const nextSettings = await api.updateSettings({
         enabled: enabled.checked,
         autoGenerate: autoGenerate.checked,
-        executionMode: executionMode.value,
+        executionMode: requestedMode,
         allowHttp: allowHttp.checked,
       });
-      const preset = await api.updatePreset({
-        baseUrl: baseUrl.value,
-        apiKey: apiKey.value,
-        selectedModel: model.value,
-        defaultSize: defaultSize.value,
-        defaultQuality: defaultQuality.value,
-        defaultCount: Number(defaultCount.value),
-        timeoutMs: Number(timeout.value) * 1000,
-        sendSize: sendSize.checked,
-        sendQuality: sendQuality.checked,
-        sendN: sendN.checked,
-        extraBody: parsedExtra,
-      });
-      apiKey.value = '';
-      apiKey.placeholder = preset.hasApiKey ? `已保存：${preset.apiKeyMask}` : '尚未保存密钥';
+      if (previousMode !== requestedMode) {
+        const presetData = await api.getPresets();
+        presets = presetData.items || [];
+        preset = presets.find(item => item.id === presetData.activePresetId) || presets[0];
+        if (!preset) throw new Error('切换运行模式后没有可用的 API 预设');
+        activePresetId = preset.id;
+        updatePresetSelector(preset.id);
+        loadPresetFields(preset);
+      }
       store.set({ settings: nextSettings, preset });
       const healthData = await api.health();
       health.textContent = healthData.mode === 'direct'
@@ -238,17 +404,21 @@ export function createToolPanel({ api, store }) {
         : '● Server Plugin 已连接';
       health.classList.add('is-ready');
       status.textContent = executionMode.value === 'direct'
-        ? '设置已保存；当前为仓库链接直装模式'
+        ? `API 预设“${preset.name}”已保存`
         : '设置已保存；当前为 Server Plugin 增强模式';
     });
   }
 
   async function load() {
     try {
-      const [healthData, settings, presets] = await Promise.all([
+      const [healthData, settings, presetData] = await Promise.all([
         api.health(), api.getSettings(), api.getPresets(),
       ]);
-      const preset = presets.items[0];
+      presets = presetData.items || [];
+      const preset = presets.find(item => item.id === presetData.activePresetId) || presets[0];
+      if (!preset) throw new Error('没有可用的 API 预设');
+      activePresetId = preset.id;
+      updatePresetSelector(preset.id);
       health.textContent = healthData.mode === 'direct'
         ? '● 免服务端模式已就绪'
         : '● Server Plugin 已连接';
@@ -257,19 +427,9 @@ export function createToolPanel({ api, store }) {
       autoGenerate.checked = settings.autoGenerate;
       executionMode.value = settings.executionMode || healthData.mode || 'direct';
       allowHttp.checked = settings.allowHttp;
-      baseUrl.value = preset.baseUrl;
-      model.value = preset.selectedModel;
-      defaultSize.value = preset.defaultSize;
-      defaultQuality.value = preset.defaultQuality;
-      defaultCount.value = String(preset.defaultCount);
-      timeout.value = String(Math.round(preset.timeoutMs / 1000));
-      extraBody.value = JSON.stringify(preset.extraBody || {}, null, 2);
-      sendSize.checked = preset.sendSize;
-      sendQuality.checked = preset.sendQuality;
-      sendN.checked = preset.sendN;
-      apiKey.placeholder = preset.hasApiKey ? `已保存：${preset.apiKeyMask}` : '尚未保存密钥';
-      updateModelList(preset.cachedModels);
-      normalizePreview();
+      createPreset.disabled = executionMode.value === 'server';
+      deletePreset.disabled = executionMode.value === 'server';
+      loadPresetFields(preset);
       store.set({ health: healthData, settings, preset, serviceError: null });
     } catch (error) {
       health.textContent = api.mode() === 'server'
@@ -281,6 +441,12 @@ export function createToolPanel({ api, store }) {
       store.set({ serviceError: error });
     }
   }
+
+  executionMode.addEventListener('change', () => {
+    const serverMode = executionMode.value === 'server';
+    createPreset.disabled = serverMode;
+    deletePreset.disabled = serverMode;
+  });
 
   function showTab(name) {
     const isSettings = name === 'settings';
@@ -309,7 +475,7 @@ export function createToolPanel({ api, store }) {
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !overlay.hidden) hide();
   });
-  panel.append(header, tabs, settingsPage, gallery.root, modelList);
+  panel.append(header, tabs, settingsPage, gallery.root);
   overlay.append(panel);
   document.body.append(overlay);
   void load();

@@ -13,7 +13,8 @@ import {
   listModelsDirect,
 } from './openai-direct.js';
 
-const API_KEY_STORAGE = 'stImageAtelier.directApiKey.v1';
+const LEGACY_API_KEY_STORAGE = 'stImageAtelier.directApiKey.v1';
+const API_KEY_STORAGE_PREFIX = 'stImageAtelier.directApiKey.v2:';
 const ACTIVE_STATUSES = new Set(['queued', 'generating', 'downloading', 'saving']);
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'interrupted', 'cancelled']);
 
@@ -35,6 +36,22 @@ function uuid() {
     });
 }
 
+function normalizePreset(value = {}) {
+  const preset = {
+    ...clone(DEFAULT_PRESET),
+    ...value,
+    cachedModels: Array.isArray(value.cachedModels) ? value.cachedModels : [],
+    extraBody: value.extraBody && typeof value.extraBody === 'object' ? value.extraBody : {},
+    ratioMap: {
+      ...clone(DEFAULT_PRESET.ratioMap),
+      ...(value.ratioMap || {}),
+    },
+  };
+  preset.id = String(preset.id || uuid());
+  preset.name = String(preset.name || '未命名预设').trim() || '未命名预设';
+  return preset;
+}
+
 function ensureNamespace(extensionSettings) {
   const previous = extensionSettings[MODULE_NAME];
   const namespace = previous && typeof previous === 'object' ? previous : {};
@@ -43,18 +60,20 @@ function ensureNamespace(extensionSettings) {
     ...(namespace.settings || {}),
     executionMode: namespace.settings?.executionMode || 'direct',
   };
-  namespace.preset = {
-    ...clone(DEFAULT_PRESET),
-    ...(namespace.preset || {}),
-    cachedModels: Array.isArray(namespace.preset?.cachedModels) ? namespace.preset.cachedModels : [],
-    extraBody: namespace.preset?.extraBody && typeof namespace.preset.extraBody === 'object'
-      ? namespace.preset.extraBody
-      : {},
-    ratioMap: {
-      ...clone(DEFAULT_PRESET.ratioMap),
-      ...(namespace.preset?.ratioMap || {}),
-    },
-  };
+  const sourcePresets = Array.isArray(namespace.presets) && namespace.presets.length
+    ? namespace.presets
+    : [namespace.preset || DEFAULT_PRESET];
+  const seenIds = new Set();
+  namespace.presets = sourcePresets.map(value => {
+    const preset = normalizePreset(value);
+    if (seenIds.has(preset.id)) preset.id = uuid();
+    seenIds.add(preset.id);
+    return preset;
+  });
+  namespace.activePresetId = namespace.presets.some(item => item.id === namespace.activePresetId)
+    ? namespace.activePresetId
+    : namespace.presets[0].id;
+  delete namespace.preset;
   namespace.gallery = Array.isArray(namespace.gallery) ? namespace.gallery : [];
   namespace.deletedResultIds = Array.isArray(namespace.deletedResultIds)
     ? namespace.deletedResultIds
@@ -93,21 +112,45 @@ export function createDirectApiClient({
   const namespace = ensureNamespace(extensionSettings);
   const controllers = new Map();
   const resultIndex = new Map(namespace.gallery.map(result => [result.resultId, result]));
-  let memoryKey = '';
+  const memoryKeys = new Map();
 
-  function getApiKey() {
+  function presetById(presetId = namespace.activePresetId) {
+    return namespace.presets.find(item => item.id === presetId) || null;
+  }
+
+  function activePreset() {
+    return presetById() || namespace.presets[0];
+  }
+
+  function keyStorageName(presetId) {
+    return `${API_KEY_STORAGE_PREFIX}${presetId}`;
+  }
+
+  function getApiKey(presetId = namespace.activePresetId) {
+    const storageName = keyStorageName(presetId);
     try {
-      return keyStorage?.getItem(API_KEY_STORAGE) || memoryKey;
+      const current = keyStorage?.getItem(storageName);
+      if (current) return current;
+      if (presetId === 'default') {
+        const legacy = keyStorage?.getItem(LEGACY_API_KEY_STORAGE);
+        if (legacy) {
+          keyStorage?.setItem(storageName, legacy);
+          return legacy;
+        }
+      }
+      return memoryKeys.get(presetId) || '';
     } catch {
-      return memoryKey;
+      return memoryKeys.get(presetId) || '';
     }
   }
 
-  function setApiKey(value) {
-    memoryKey = value;
+  function setApiKey(presetId, value) {
+    memoryKeys.set(presetId, value);
+    const storageName = keyStorageName(presetId);
     try {
-      if (value) keyStorage?.setItem(API_KEY_STORAGE, value);
-      else keyStorage?.removeItem(API_KEY_STORAGE);
+      if (value) keyStorage?.setItem(storageName, value);
+      else keyStorage?.removeItem(storageName);
+      if (presetId === 'default') keyStorage?.removeItem(LEGACY_API_KEY_STORAGE);
     } catch {
       // Sandboxed or privacy-restricted browsers can still use the key in this session.
     }
@@ -241,9 +284,9 @@ export function createDirectApiClient({
       chatId: input.chatId,
       messageUuid: input.messageUuid,
       prompt: input.prompt,
-      presetId: 'default',
-      presetNameSnapshot: namespace.preset.name,
-      apiModel: namespace.preset.selectedModel,
+      presetId: attempt.presetId,
+      presetNameSnapshot: attempt.presetNameSnapshot,
+      apiModel: attempt.model,
       localRelativePath: uploaded.path,
       mimeType: type.mimeType,
       byteSize: bytes.byteLength,
@@ -309,14 +352,17 @@ export function createDirectApiClient({
     if (!found) throw new DirectError('VALIDATION_FAILED', '找不到对应的生图标签');
     const existing = found.tag.attempts?.find(item => item.attemptId === input.attemptId);
     if (existing) return clone(existing);
+    const preset = clone(presetById(input.presetId) || activePreset());
+    if (!preset) throw new DirectError('PRESET_NOT_CONFIGURED', '找不到所选 API 预设');
+    const apiKey = getApiKey(preset.id);
 
     const attempt = {
       attemptId: input.attemptId,
       tagId: input.tagId,
       requestMode: input.requestMode,
-      presetId: 'default',
-      presetNameSnapshot: namespace.preset.name,
-      model: namespace.preset.selectedModel,
+      presetId: preset.id,
+      presetNameSnapshot: preset.name,
+      model: preset.selectedModel,
       parameters: clone(input.parameters || {}),
       status: 'queued',
       resultIds: [],
@@ -339,11 +385,11 @@ export function createDirectApiClient({
     try {
       attempt.status = 'generating';
       await persistAttempt(found, attempt);
-      const size = namespace.preset.ratioMap?.[input.parameters?.ratio]
-        || namespace.preset.defaultSize;
+      const size = preset.ratioMap?.[input.parameters?.ratio]
+        || preset.defaultSize;
       const sources = await generateImages({
-        preset: namespace.preset,
-        apiKey: getApiKey(),
+        preset,
+        apiKey,
         prompt: input.prompt,
         parameters: { ...input.parameters, size },
         settings: namespace.settings,
@@ -449,7 +495,7 @@ export function createDirectApiClient({
     mode: () => namespace.settings.executionMode || 'direct',
     health: async () => ({
       mode: 'direct',
-      version: '1.1.0',
+      version: '1.2.0',
       corsRequired: true,
       storage: 'sillytavern-images',
     }),
@@ -459,34 +505,93 @@ export function createDirectApiClient({
       await savePreferences();
       return clone(namespace.settings);
     },
-    getPresets: async () => ({ items: [publicPreset(namespace.preset, getApiKey())] }),
-    updatePreset: async patch => {
-      if (typeof patch.apiKey === 'string' && patch.apiKey) setApiKey(patch.apiKey);
+    getPresets: async () => ({
+      activePresetId: namespace.activePresetId,
+      items: namespace.presets.map(preset => publicPreset(preset, getApiKey(preset.id))),
+    }),
+    selectPreset: async presetId => {
+      const preset = presetById(presetId);
+      if (!preset) throw new DirectError('VALIDATION_FAILED', '找不到所选 API 预设');
+      namespace.activePresetId = preset.id;
+      await savePreferences();
+      return publicPreset(preset, getApiKey(preset.id));
+    },
+    createPreset: async ({ name = '新预设' } = {}) => {
+      const timestamp = now();
+      const preset = normalizePreset({
+        ...clone(DEFAULT_PRESET),
+        id: uuid(),
+        name,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        schemaVersion: SCHEMA_VERSION,
+      });
+      namespace.presets.push(preset);
+      namespace.activePresetId = preset.id;
+      await savePreferences();
+      return publicPreset(preset, '');
+    },
+    updatePreset: async (presetId, patch) => {
+      if (patch == null && presetId && typeof presetId === 'object') {
+        patch = presetId;
+        presetId = namespace.activePresetId;
+      }
+      const preset = presetById(presetId || namespace.activePresetId);
+      if (!preset) throw new DirectError('VALIDATION_FAILED', '找不到要保存的 API 预设');
+      if (typeof patch?.apiKey === 'string' && patch.apiKey) setApiKey(preset.id, patch.apiKey);
       const next = { ...patch };
       delete next.apiKey;
-      Object.assign(namespace.preset, next, { updatedAt: now(), schemaVersion: SCHEMA_VERSION });
+      delete next.id;
+      Object.assign(preset, normalizePreset({ ...preset, ...next }), {
+        id: preset.id,
+        updatedAt: now(),
+        schemaVersion: SCHEMA_VERSION,
+      });
       await savePreferences();
-      return publicPreset(namespace.preset, getApiKey());
+      return publicPreset(preset, getApiKey(preset.id));
     },
-    clearSecret: async () => {
-      setApiKey('');
+    deletePreset: async presetId => {
+      if (namespace.presets.length <= 1) {
+        throw new DirectError('VALIDATION_FAILED', '至少需要保留一个 API 预设');
+      }
+      const index = namespace.presets.findIndex(item => item.id === presetId);
+      if (index < 0) throw new DirectError('VALIDATION_FAILED', '找不到要删除的 API 预设');
+      const [removed] = namespace.presets.splice(index, 1);
+      setApiKey(removed.id, '');
+      if (namespace.activePresetId === removed.id) {
+        namespace.activePresetId = namespace.presets[Math.min(index, namespace.presets.length - 1)].id;
+      }
+      await savePreferences();
+      return {
+        deleted: true,
+        activePreset: publicPreset(activePreset(), getApiKey(namespace.activePresetId)),
+      };
+    },
+    clearSecret: async presetId => {
+      const preset = presetById(presetId || namespace.activePresetId);
+      if (!preset) throw new DirectError('VALIDATION_FAILED', '找不到所选 API 预设');
+      setApiKey(preset.id, '');
       return { cleared: true };
     },
-    listModels: async () => {
+    listModels: async presetId => {
+      const preset = presetById(presetId || namespace.activePresetId);
+      if (!preset) throw new DirectError('VALIDATION_FAILED', '找不到所选 API 预设');
       const models = await listModelsDirect({
-        preset: namespace.preset,
-        apiKey: getApiKey(),
+        preset,
+        apiKey: getApiKey(preset.id),
         settings: namespace.settings,
       });
-      namespace.preset.cachedModels = models;
-      namespace.preset.modelsFetchedAt = now();
+      preset.cachedModels = models;
+      preset.modelsFetchedAt = now();
       await savePreferences();
       return { models: clone(models) };
     },
-    testPreset: async () => {
+    testPreset: async presetId => {
+      const preset = presetById(presetId || namespace.activePresetId);
+      if (!preset) throw new DirectError('VALIDATION_FAILED', '找不到所选 API 预设');
       const models = await listModelsDirect({
-        preset: namespace.preset,
-        apiKey: getApiKey(),
+        preset,
+        apiKey: getApiKey(preset.id),
         settings: namespace.settings,
       });
       return { ok: true, modelCount: models.length };

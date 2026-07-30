@@ -140,6 +140,29 @@
   gap: 6px;
 }
 
+.stia-field--wide {
+  grid-column: 1 / -1;
+}
+
+.stia-inline-control {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+}
+
+.stia-field .stia-inline-control > select,
+.stia-field .stia-inline-control > input {
+  flex: 1 1 180px;
+  width: auto;
+  min-width: 0;
+}
+
+.stia-inline-control > .stia-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .stia-field > span {
   font-size: 13px;
   color: var(--SmartThemeEmColor, #aaa);
@@ -339,6 +362,18 @@
 
   .stia-form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .stia-field--wide {
+    grid-column: auto;
+  }
+
+  .stia-inline-control {
+    flex-wrap: wrap;
+  }
+
+  .stia-inline-control > .stia-button {
+    flex: 1 1 auto;
   }
 
   .stia-gallery-grid {

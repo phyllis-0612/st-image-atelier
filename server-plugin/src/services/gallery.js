@@ -36,9 +36,10 @@ class GalleryService {
     await this.storage.remove(result.localRelativePath);
     const now = new Date().toISOString();
     await this.metadata.transaction(index => {
-      result.status = 'deleted';
-      result.deletedAt = now;
-      const tag = index.tags[result.tagId];
+      const nextResult = index.results[resultId];
+      nextResult.status = 'deleted';
+      nextResult.deletedAt = now;
+      const tag = index.tags[nextResult.tagId];
       if (tag) {
         tag.autoSuppressed = true;
         const available = tag.resultIds
@@ -49,7 +50,7 @@ class GalleryService {
         tag.updatedAt = now;
       }
     });
-    return result;
+    return this.metadata.getResult(resultId);
   }
 }
 

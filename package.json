@@ -1,6 +1,6 @@
 {
   "name": "st-image-atelier",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "One-click SillyTavern 1.14-1.18 OpenAI-compatible image generation extension",
   "type": "module",
   "private": true,

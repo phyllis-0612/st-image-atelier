@@ -5,6 +5,7 @@ import {
   base64ToBytes,
   bytesToBase64,
   detectImageType,
+  extractUpstreamError,
   fetchJson,
   normalizeEndpoint,
   parseImageResponse,
@@ -43,6 +44,28 @@ test('浏览器网络/CORS 失败映射为明确错误', async t => {
   await assert.rejects(
     fetchJson('https://api.example.com/v1/models', {}, 1000),
     error => error.code === 'DIRECT_FETCH_BLOCKED' && /浏览器无法读取/.test(error.message),
+  );
+});
+
+test('上游 HTTP 错误展示真实原因并隐藏密钥', async t => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    error: {
+      message: 'Unsupported parameter: quality; Authorization: Bearer sk-secret-value',
+    },
+  }), { status: 400 });
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  await assert.rejects(
+    fetchJson('https://api.example.com/v1/images/generations', {}, 1000),
+    error => error.code === 'UPSTREAM_HTTP_ERROR'
+      && /HTTP 400/.test(error.message)
+      && /Unsupported parameter: quality/.test(error.message)
+      && !/sk-secret-value/.test(error.message),
+  );
+  assert.equal(
+    extractUpstreamError('{"detail":"generation path mismatch"}'),
+    'generation path mismatch',
   );
 });
 

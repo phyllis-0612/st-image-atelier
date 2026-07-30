@@ -14,8 +14,8 @@ const ERROR_MESSAGES = {
 };
 
 export class DirectError extends Error {
-  constructor(code, details = '', status = 400, retryable = false) {
-    super(ERROR_MESSAGES[code] || '生图请求失败');
+  constructor(code, details = '', status = 400, retryable = false, publicMessage = '') {
+    super(publicMessage || ERROR_MESSAGES[code] || '生图请求失败');
     this.name = 'DirectError';
     this.code = code;
     this.details = details;
@@ -91,14 +91,63 @@ export function parseModelsResponse(payload) {
     .filter(item => item.id);
 }
 
+function sanitizeUpstreamText(value) {
+  return String(value || '')
+    .replace(/\bBearer\s+[^\s"',}]+/gi, 'Bearer [已隐藏]')
+    .replace(/\b(?:sk|key)-[A-Za-z0-9._-]{6,}\b/g, '[已隐藏密钥]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500);
+}
+
+export function extractUpstreamError(bodyText) {
+  let value = bodyText;
+  try {
+    const payload = JSON.parse(bodyText);
+    value = payload?.error?.message
+      || payload?.error?.detail
+      || payload?.message
+      || payload?.detail
+      || (typeof payload?.error === 'string' ? payload.error : '')
+      || bodyText;
+  } catch {
+    // Plain-text error bodies are common among OpenAI-compatible gateways.
+  }
+  return sanitizeUpstreamText(value) || '上游没有返回错误详情';
+}
+
 function mapStatus(status, bodyText) {
+  const reason = extractUpstreamError(bodyText);
   if (status === 401 || status === 403) {
-    return new DirectError('UPSTREAM_AUTH_FAILED', bodyText, status);
+    return new DirectError(
+      'UPSTREAM_AUTH_FAILED',
+      reason,
+      status,
+      false,
+      `API 鉴权失败（HTTP ${status}）：${reason}`,
+    );
   }
   if (status === 429) {
-    return new DirectError('UPSTREAM_RATE_LIMITED', bodyText, status, true);
+    return new DirectError(
+      'UPSTREAM_RATE_LIMITED',
+      reason,
+      status,
+      true,
+      `API 限流（HTTP 429）：${reason}`,
+    );
   }
-  return new DirectError('UPSTREAM_HTTP_ERROR', `HTTP ${status}: ${bodyText}`, status, status >= 500);
+  const hint = status === 404
+    ? '；请检查“生图路径”是否与该 API 一致'
+    : status === 400
+      ? '；若上游提示参数不支持，可在“高级设置”关闭 size、quality 或 n'
+      : '';
+  return new DirectError(
+    'UPSTREAM_HTTP_ERROR',
+    reason,
+    status,
+    status >= 500,
+    `上游生图请求失败（HTTP ${status}）：${reason}${hint}`,
+  );
 }
 
 export async function fetchJson(url, options, timeoutMs) {

@@ -45,10 +45,22 @@ export function createServerApiClient(compat) {
     getSettings: () => request('/settings'),
     updateSettings: patch => request('/settings', { method: 'PATCH', body: json(patch) }),
     getPresets: () => request('/presets'),
-    updatePreset: patch => request('/presets/default', { method: 'PATCH', body: json(patch) }),
-    clearSecret: () => request('/presets/default/clear-secret', { method: 'POST', body: '{}' }),
-    listModels: () => request('/presets/default/models', { method: 'POST', body: '{}' }),
-    testPreset: () => request('/presets/default/test', { method: 'POST', body: '{}' }),
+    updatePreset: (presetId, patch) => request(`/presets/${encodeURIComponent(presetId)}`, {
+      method: 'PATCH',
+      body: json(patch),
+    }),
+    clearSecret: presetId => request(`/presets/${encodeURIComponent(presetId)}/clear-secret`, {
+      method: 'POST',
+      body: '{}',
+    }),
+    listModels: presetId => request(`/presets/${encodeURIComponent(presetId)}/models`, {
+      method: 'POST',
+      body: '{}',
+    }),
+    testPreset: presetId => request(`/presets/${encodeURIComponent(presetId)}/test`, {
+      method: 'POST',
+      body: '{}',
+    }),
     resolveTags: tagIds => request('/tags/resolve', { method: 'POST', body: json({ tagIds }) }),
     generate: input => request('/generate', { method: 'POST', body: json(input) }),
     attempt: attemptId => request(`/attempts/${encodeURIComponent(attemptId)}`),
@@ -105,10 +117,25 @@ export function createApiClient({
     getSettings,
     updateSettings,
     getPresets: () => selected().getPresets(),
-    updatePreset: patch => selected().updatePreset(patch),
-    clearSecret: () => selected().clearSecret(),
-    listModels: () => selected().listModels(),
-    testPreset: () => selected().testPreset(),
+    selectPreset: presetId => direct.mode() === 'direct'
+      ? direct.selectPreset(presetId)
+      : server.getPresets().then(data => data.items.find(item => item.id === presetId)),
+    createPreset: input => {
+      if (direct.mode() !== 'direct') {
+        throw new ApiError({ message: '多 API 预设目前用于免服务端直连模式' }, 400);
+      }
+      return direct.createPreset(input);
+    },
+    updatePreset: (presetId, patch) => selected().updatePreset(presetId, patch),
+    deletePreset: presetId => {
+      if (direct.mode() !== 'direct') {
+        throw new ApiError({ message: '多 API 预设目前用于免服务端直连模式' }, 400);
+      }
+      return direct.deletePreset(presetId);
+    },
+    clearSecret: presetId => selected().clearSecret(presetId),
+    listModels: presetId => selected().listModels(presetId),
+    testPreset: presetId => selected().testPreset(presetId),
     resolveTags: tagIds => selected().resolveTags(tagIds),
     generate: input => selected().generate(input),
     attempt: attemptId => selected().attempt(attemptId),

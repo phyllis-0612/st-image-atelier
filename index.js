@@ -78,7 +78,7 @@ async function generate(tag, mode) {
       tagId: tag.tagId,
       attemptId,
       requestMode: mode,
-      presetId: 'default',
+      presetId: store.state.preset?.id || 'default',
       prompt: tag.prompt,
       chatId: tag.chatId || compat.currentChatId(),
       messageUuid: tag.messageUuid,

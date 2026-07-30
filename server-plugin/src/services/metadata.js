@@ -106,11 +106,7 @@ class MetadataStore {
   }
 
   async persist() {
-    this.index.updatedAt = new Date().toISOString();
-    this.writeChain = this.writeChain.then(() =>
-      atomicWriteJson(this.file, this.index, { backupFile: this.backup }),
-    );
-    return this.writeChain;
+    return this.transaction(() => {});
   }
 
   getTag(tagId) { return this.index.tags[tagId] || null; }
@@ -118,26 +114,36 @@ class MetadataStore {
   getResult(resultId) { return this.index.results[resultId] || null; }
 
   async putTag(record) {
-    this.index.tags[record.tagId] = record;
-    await this.persist();
+    await this.transaction(index => {
+      index.tags[record.tagId] = structuredClone(record);
+    });
     return record;
   }
 
   async putAttempt(record) {
-    this.index.attempts[record.attemptId] = record;
-    await this.persist();
+    await this.transaction(index => {
+      index.attempts[record.attemptId] = structuredClone(record);
+    });
     return record;
   }
 
   async putResult(record) {
-    this.index.results[record.resultId] = record;
-    await this.persist();
+    await this.transaction(index => {
+      index.results[record.resultId] = structuredClone(record);
+    });
     return record;
   }
 
   async transaction(mutator) {
-    await mutator(this.index);
-    await this.persist();
+    const operation = this.writeChain.then(async () => {
+      const next = structuredClone(this.index);
+      await mutator(next);
+      next.updatedAt = new Date().toISOString();
+      await atomicWriteJson(this.file, next, { backupFile: this.backup });
+      this.index = next;
+    });
+    this.writeChain = operation.catch(() => {});
+    return operation;
   }
 
   listResults({ cursor, limit = 30 } = {}) {

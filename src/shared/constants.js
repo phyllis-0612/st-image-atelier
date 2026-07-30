@@ -1,7 +1,7 @@
 export const MODULE_NAME = 'stImageAtelier';
 export const DISPLAY_NAME = 'Image Atelier';
 export const API_ROOT = '/api/plugins/st-image-atelier';
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const ATTEMPT_STATUS = Object.freeze({
   IDLE: 'idle',

@@ -142,3 +142,61 @@ test('仓库链接直装模式完成生成、幂等、画廊与删除', async t 
     await upstream.close();
   });
 });
+
+test('旧版单预设迁移为多预设，且每个预设独立保存密钥', async () => {
+  const storage = new Map([['stImageAtelier.directApiKey.v1', 'sk-legacy']]);
+  const extensionSettings = {
+    stImageAtelier: {
+      preset: {
+        id: 'default',
+        name: '旧版主站',
+        baseUrl: 'https://api.example.com',
+        selectedModel: 'model-old',
+      },
+    },
+  };
+  const client = createDirectApiClient({
+    compat: {
+      chat: () => [],
+      save: async () => {},
+      headers: () => ({ 'Content-Type': 'application/json' }),
+    },
+    extensionSettings,
+    saveSettingsDebounced: () => {},
+    keyStorage: {
+      getItem: key => storage.get(key) || null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: key => storage.delete(key),
+    },
+  });
+
+  let data = await client.getPresets();
+  assert.equal(data.activePresetId, 'default');
+  assert.equal(data.items[0].name, '旧版主站');
+  assert.equal(data.items[0].hasApiKey, true);
+  assert.equal(extensionSettings.stImageAtelier.preset, undefined);
+  assert.equal(extensionSettings.stImageAtelier.presets.length, 1);
+
+  const backup = await client.createPreset({ name: '备用 API' });
+  await client.updatePreset(backup.id, {
+    baseUrl: 'https://backup.example.com',
+    apiKey: 'sk-backup',
+    selectedModel: 'model-new',
+  });
+  data = await client.getPresets();
+  assert.equal(data.items.length, 2);
+  assert.equal(data.activePresetId, backup.id);
+  assert.equal(data.items.find(item => item.id === backup.id).hasApiKey, true);
+
+  await client.clearSecret(backup.id);
+  data = await client.getPresets();
+  assert.equal(data.items.find(item => item.id === backup.id).hasApiKey, false);
+  assert.equal(data.items.find(item => item.id === 'default').hasApiKey, true);
+
+  const selected = await client.selectPreset('default');
+  assert.equal(selected.name, '旧版主站');
+  const removed = await client.deletePreset(backup.id);
+  assert.equal(removed.activePreset.id, 'default');
+  assert.equal((await client.getPresets()).items.length, 1);
+  assert.doesNotMatch(JSON.stringify(extensionSettings), /sk-(?:legacy|backup)/);
+});

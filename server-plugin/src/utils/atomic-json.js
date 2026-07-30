@@ -22,15 +22,30 @@ async function atomicWriteJson(file, value, { backupFile } = {}) {
       if (error.code !== 'ENOENT') throw error;
     }
   }
+  const serialized = `${JSON.stringify(value, null, 2)}\n`;
   const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
   const handle = await fs.open(temporary, 'wx', 0o600);
   try {
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    await handle.writeFile(serialized, 'utf8');
     await handle.sync();
   } finally {
     await handle.close();
   }
-  await fs.rename(temporary, file);
+  const transientCodes = new Set(['EACCES', 'EPERM', 'EBUSY', 'ENOENT']);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fs.rename(temporary, file);
+      return;
+    } catch (error) {
+      if (!transientCodes.has(error.code) || attempt >= 5) throw error;
+      try {
+        if (await fs.readFile(file, 'utf8') === serialized) return;
+      } catch {
+        // The destination may not exist yet; retry the atomic rename below.
+      }
+      await new Promise(resolve => setTimeout(resolve, 10 * (2 ** attempt)));
+    }
+  }
 }
 
 module.exports = { readJson, atomicWriteJson };
