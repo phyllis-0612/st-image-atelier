@@ -7,11 +7,12 @@ import { fileURLToPath } from 'node:url';
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function argumentsOf(argv) {
-  const result = { force: false, enableServerPlugins: false, st: '' };
+  const result = { force: false, enableServerPlugins: false, withServerPlugin: false, st: '' };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === '--force') result.force = true;
     else if (value === '--enable-server-plugins') result.enableServerPlugins = true;
+    else if (value === '--with-server-plugin') result.withServerPlugin = true;
     else if (value === '--st') result.st = argv[++index] || '';
     else if (!value.startsWith('-') && !result.st) result.st = value;
   }
@@ -109,16 +110,19 @@ async function main() {
   const stRoot = await findSillyTavern(options.st);
   const version = await validate(stRoot);
   const uiTarget = path.join(stRoot, 'public', 'scripts', 'extensions', 'third-party', 'st-image-atelier');
-  const pluginTarget = path.join(stRoot, 'plugins', 'st-image-atelier');
   await fs.mkdir(path.dirname(uiTarget), { recursive: true });
-  await fs.mkdir(path.dirname(pluginTarget), { recursive: true });
   await installUi(uiTarget, options.force);
-  await copyDirectory(path.join(sourceRoot, 'server-plugin'), pluginTarget, options.force);
-  const config = await inspectConfig(stRoot, options.enableServerPlugins);
   console.log(`Image Atelier 已安装到 SillyTavern ${version}`);
   console.log(`UI: ${uiTarget}`);
-  console.log(`Server Plugin: ${pluginTarget}`);
-  console.log(config.message);
+  console.log('运行模式：免服务端直连（默认，无需修改 config.yaml）');
+  if (options.withServerPlugin) {
+    const pluginTarget = path.join(stRoot, 'plugins', 'st-image-atelier');
+    await fs.mkdir(path.dirname(pluginTarget), { recursive: true });
+    await copyDirectory(path.join(sourceRoot, 'server-plugin'), pluginTarget, options.force);
+    const config = await inspectConfig(stRoot, options.enableServerPlugins);
+    console.log(`可选 Server Plugin: ${pluginTarget}`);
+    console.log(config.message);
+  }
   console.log(`重启：cd "${stRoot}" && npm start`);
 }
 

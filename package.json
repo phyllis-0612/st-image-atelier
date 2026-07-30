@@ -1,13 +1,13 @@
 {
   "name": "st-image-atelier",
-  "version": "1.0.0",
-  "description": "SillyTavern 1.14-1.18 image generation extension with local persistence",
+  "version": "1.1.0",
+  "description": "One-click SillyTavern 1.14-1.18 OpenAI-compatible image generation extension",
   "type": "module",
   "private": true,
   "scripts": {
     "test": "node --test",
-    "test:unit": "node --test tests/unit",
-    "test:integration": "node --test tests/integration",
+    "test:unit": "node --test tests/unit/parser.test.js tests/unit/tag-identity.test.js tests/unit/server-utils.test.js tests/unit/direct-adapter.test.js",
+    "test:integration": "node --test tests/integration/generation.test.js tests/integration/install.test.js tests/integration/direct-client.test.js",
     "verify": "node scripts/verify-install.mjs --self"
   },
   "engines": {

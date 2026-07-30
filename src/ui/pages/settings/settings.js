@@ -15,6 +15,17 @@ function input(type = 'text') {
   return element;
 }
 
+function select(options) {
+  const element = document.createElement('select');
+  for (const [value, label] of options) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    element.append(option);
+  }
+  return element;
+}
+
 function action(label, handler, primary = false) {
   const element = document.createElement('button');
   element.type = 'button';
@@ -58,6 +69,10 @@ export function createToolPanel({ api, store }) {
 
   const enabled = input('checkbox');
   const autoGenerate = input('checkbox');
+  const executionMode = select([
+    ['direct', '免服务端直连（推荐，一键安装）'],
+    ['server', 'Server Plugin 增强模式'],
+  ]);
   const allowHttp = input('checkbox');
   const baseUrl = input('url');
   baseUrl.placeholder = 'https://api.example.com';
@@ -111,6 +126,7 @@ export function createToolPanel({ api, store }) {
   basic.append(
     enabledField,
     autoField,
+    field('运行模式', executionMode),
     field('Base URL', baseUrl),
     field('API Key', apiKey),
     field('模型', model),
@@ -121,7 +137,7 @@ export function createToolPanel({ api, store }) {
 
   const warning = document.createElement('p');
   warning.className = 'stia-warning';
-  warning.textContent = '允许 HTTP 仅适合受信任的本地服务，网络传输不会加密。';
+  warning.textContent = '免服务端模式会从浏览器直连 API，API Key 保存在当前酒馆账户的前端存储中；中转站必须允许 CORS。允许 HTTP 仅适合受信任的本地服务。';
   const advanced = document.createElement('details');
   const advancedSummary = document.createElement('summary');
   advancedSummary.textContent = '高级设置';
@@ -197,6 +213,7 @@ export function createToolPanel({ api, store }) {
       const nextSettings = await api.updateSettings({
         enabled: enabled.checked,
         autoGenerate: autoGenerate.checked,
+        executionMode: executionMode.value,
         allowHttp: allowHttp.checked,
       });
       const preset = await api.updatePreset({
@@ -215,7 +232,14 @@ export function createToolPanel({ api, store }) {
       apiKey.value = '';
       apiKey.placeholder = preset.hasApiKey ? `已保存：${preset.apiKeyMask}` : '尚未保存密钥';
       store.set({ settings: nextSettings, preset });
-      status.textContent = '设置已保存';
+      const healthData = await api.health();
+      health.textContent = healthData.mode === 'direct'
+        ? '● 免服务端模式已就绪'
+        : '● Server Plugin 已连接';
+      health.classList.add('is-ready');
+      status.textContent = executionMode.value === 'direct'
+        ? '设置已保存；当前为仓库链接直装模式'
+        : '设置已保存；当前为 Server Plugin 增强模式';
     });
   }
 
@@ -225,10 +249,13 @@ export function createToolPanel({ api, store }) {
         api.health(), api.getSettings(), api.getPresets(),
       ]);
       const preset = presets.items[0];
-      health.textContent = '● 服务端已连接';
+      health.textContent = healthData.mode === 'direct'
+        ? '● 免服务端模式已就绪'
+        : '● Server Plugin 已连接';
       health.classList.add('is-ready');
       enabled.checked = settings.enabled;
       autoGenerate.checked = settings.autoGenerate;
+      executionMode.value = settings.executionMode || healthData.mode || 'direct';
       allowHttp.checked = settings.allowHttp;
       baseUrl.value = preset.baseUrl;
       model.value = preset.selectedModel;
@@ -245,7 +272,9 @@ export function createToolPanel({ api, store }) {
       normalizePreview();
       store.set({ health: healthData, settings, preset, serviceError: null });
     } catch (error) {
-      health.textContent = '○ 服务端未连接';
+      health.textContent = api.mode() === 'server'
+        ? '○ Server Plugin 未连接'
+        : '○ 免服务端模式初始化失败';
       health.classList.remove('is-ready');
       status.className = 'stia-status stia-error';
       status.textContent = error.message;

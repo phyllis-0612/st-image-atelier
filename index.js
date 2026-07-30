@@ -3,8 +3,10 @@ import {
   event_types,
   getRequestHeaders,
   saveChatConditional,
+  saveSettingsDebounced,
 } from '../../../../script.js';
-import { getContext } from '../../../extensions.js';
+import { extension_settings, getContext } from '../../../extensions.js';
+import { accountStorage } from '../../../util/AccountStorage.js';
 import { createStCompat } from './src/ui/compat/st-api.js';
 import { createApiClient } from './src/ui/api/client.js';
 import { createStore } from './src/ui/state/store.js';
@@ -20,7 +22,12 @@ const compat = createStCompat({
   saveChatConditional,
   getRequestHeaders,
 });
-const api = createApiClient(compat);
+const api = createApiClient({
+  compat,
+  extensionSettings: extension_settings,
+  saveSettingsDebounced,
+  keyStorage: accountStorage,
+});
 const store = createStore();
 store.subscribe(state => {
   document.documentElement.classList.toggle('stia-disabled', !state.settings.enabled);
@@ -44,6 +51,12 @@ async function waitForAttempt(attemptId, tagId) {
     }
     await new Promise(resolve => setTimeout(resolve, 900));
   }
+}
+
+async function refreshTag(tagId) {
+  const [resolved] = await api.resolveTags([tagId]);
+  store.setTag(tagId, resolved);
+  return resolved;
 }
 
 async function generate(tag, mode) {
@@ -76,12 +89,27 @@ async function generate(tag, mode) {
         count: tag.count,
       },
     });
+    if (['succeeded', 'failed', 'interrupted', 'cancelled'].includes(attempt.status)) {
+      await refreshTag(tag.tagId);
+      return attempt;
+    }
     return await waitForAttempt(attempt.attemptId, tag.tagId);
   } catch (error) {
+    try {
+      await refreshTag(tag.tagId);
+    } catch {
+      // Keep the local failure card below when persistence could not be restored.
+    }
     queued.status = 'failed';
     queued.errorCode = error.code;
     queued.errorMessage = error.message;
-    store.setTag(tag.tagId, { ...current, attempts: [queued, ...(current.attempts || [])] });
+    const latest = store.state.tagStates.get(tag.tagId) || current;
+    if (!(latest.attempts || []).some(item => item.attemptId === attemptId)) {
+      store.setTag(tag.tagId, {
+        ...latest,
+        attempts: [queued, ...(latest.attempts || [])],
+      });
+    }
     throw error;
   } finally {
     activeTags.delete(tag.tagId);
@@ -98,8 +126,7 @@ const actions = {
       .find(value => value.attempts?.some(attempt => attempt.attemptId === attemptId));
     const tagId = entry?.tagId;
     if (tagId) {
-      const [resolved] = await api.resolveTags([tagId]);
-      store.setTag(tagId, resolved);
+      await refreshTag(tagId);
     }
   },
   openGallery: () => panel.show('gallery'),

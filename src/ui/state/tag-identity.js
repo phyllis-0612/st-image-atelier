@@ -29,6 +29,11 @@ export function reconcileTagMetadata(message, parsedTags, uuid = createUuid) {
       ratio: tag.ratio,
       quality: tag.quality,
       count: tag.count,
+      latestResultId: saved?.latestResultId || null,
+      resultIds: Array.isArray(saved?.resultIds) ? saved.resultIds : [],
+      attempts: Array.isArray(saved?.attempts) ? saved.attempts : [],
+      results: Array.isArray(saved?.results) ? saved.results : [],
+      autoAttempted: Boolean(saved?.autoAttempted),
       autoSuppressed: Boolean(saved?.autoSuppressed),
     };
   });
@@ -36,7 +41,7 @@ export function reconcileTagMetadata(message, parsedTags, uuid = createUuid) {
   const metadata = {
     messageUuid: previous.messageUuid || uuid(),
     tags,
-    schemaVersion: 1,
+    schemaVersion: 2,
   };
   message.extra.stImageAtelier = metadata;
   return {

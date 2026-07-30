@@ -1,4 +1,5 @@
 import { API_ROOT } from '../../shared/constants.js';
+import { createDirectApiClient } from './direct-client.js';
 
 export class ApiError extends Error {
   constructor(error, status) {
@@ -10,7 +11,7 @@ export class ApiError extends Error {
   }
 }
 
-export function createApiClient(compat) {
+export function createServerApiClient(compat) {
   async function request(path, options = {}) {
     let response;
     try {
@@ -60,5 +61,66 @@ export function createApiClient(compat) {
     deleteResult: resultId => request(`/gallery/${encodeURIComponent(resultId)}`, { method: 'DELETE' }),
     fileUrl: resultId => `${API_ROOT}/gallery/${encodeURIComponent(resultId)}/file`,
     downloadUrl: resultId => `${API_ROOT}/gallery/${encodeURIComponent(resultId)}/download`,
+  };
+}
+
+export function createApiClient({
+  compat,
+  extensionSettings,
+  saveSettingsDebounced,
+  keyStorage,
+}) {
+  const direct = createDirectApiClient({
+    compat,
+    extensionSettings,
+    saveSettingsDebounced,
+    keyStorage,
+  });
+  const server = createServerApiClient(compat);
+  const selected = () => direct.mode() === 'server' ? server : direct;
+
+  async function getSettings() {
+    const local = await direct.getSettings();
+    if (direct.mode() !== 'server') return local;
+    const remote = await server.getSettings();
+    return { ...remote, executionMode: 'server' };
+  }
+
+  async function updateSettings(patch) {
+    const requestedMode = patch.executionMode || direct.mode();
+    if (requestedMode !== direct.mode()) {
+      await direct.updateSettings({ executionMode: requestedMode });
+    }
+    if (requestedMode === 'direct') return direct.updateSettings(patch);
+    const remotePatch = { ...patch };
+    delete remotePatch.executionMode;
+    const remote = Object.keys(remotePatch).length
+      ? await server.updateSettings(remotePatch)
+      : await server.getSettings();
+    return { ...remote, executionMode: 'server' };
+  }
+
+  return {
+    health: () => selected().health(),
+    getSettings,
+    updateSettings,
+    getPresets: () => selected().getPresets(),
+    updatePreset: patch => selected().updatePreset(patch),
+    clearSecret: () => selected().clearSecret(),
+    listModels: () => selected().listModels(),
+    testPreset: () => selected().testPreset(),
+    resolveTags: tagIds => selected().resolveTags(tagIds),
+    generate: input => selected().generate(input),
+    attempt: attemptId => selected().attempt(attemptId),
+    cancel: attemptId => selected().cancel(attemptId),
+    gallery: options => selected().gallery(options),
+    deleteResult: resultId => selected().deleteResult(resultId),
+    fileUrl: resultId => direct.hasResult(resultId)
+      ? direct.fileUrl(resultId)
+      : server.fileUrl(resultId),
+    downloadUrl: resultId => direct.hasResult(resultId)
+      ? direct.downloadUrl(resultId)
+      : server.downloadUrl(resultId),
+    mode: () => direct.mode(),
   };
 }

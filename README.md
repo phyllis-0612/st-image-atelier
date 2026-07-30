@@ -1,45 +1,25 @@
 # Image Atelier
 
-Image Atelier 是面向 SillyTavern 1.14.x–1.18.x 的生图扩展。AI 回复完成后，它会识别 `<draw>...</draw>`，在消息内提供手动生成卡片，也可仅对本次会话中新完成的 AI 消息自动生图。
+Image Atelier 是面向 SillyTavern 1.14.x–1.18.x 的 OpenAI Images 兼容生图扩展。AI 回复完成后，它会识别 `<draw>...</draw>`，在消息原位置显示生图卡片，也可仅对本次会话中新完成的 AI 消息自动生图。
 
-项目由两部分组成：
+从 1.1.0 起，默认使用“免服务端直连”模式：只需在 SillyTavern 的扩展安装窗口粘贴仓库链接，不需要 Termux 命令，也不需要启用 Server Plugins。
 
-- UI Extension：标签解析、消息卡片、设置、自动队列与画廊。
-- Server Plugin：密钥隔离、OpenAI Images 兼容请求、幂等、图片落盘和多用户隔离。
+## 一键安装
 
-## 主要能力
+在 SillyTavern 的“安装扩展”中填写：
 
-- 一条消息可含多个独立 `<draw>` 标签。
-- 同一标签可反复生成，历史结果全部保留。
-- 服务端 `attemptId` 幂等，自动生图固定使用 `auto:<tagId>`。
-- URL 与 Base64 图片都会立即保存到 ST 用户数据目录。
-- 刷新、切换聊天和重启只恢复状态，绝不会触发生图。
-- 单预设配置、模型拉取、连接测试、中文错误信息。
-- 时间倒序画廊、原图下载和墓碑删除。
-- 深浅主题与移动端布局。
-
-## 安装
-
-要求 Node.js 18+，并需要启用 SillyTavern Server Plugins。
-
-```powershell
-node scripts/install.mjs --st "D:\path\to\SillyTavern"
+```text
+https://github.com/phyllis-0612/st-image-atelier
 ```
 
-Linux / Termux：
+安装完成后刷新页面或重启 SillyTavern。扩展菜单中会出现「✦ Image Atelier」，状态应显示「免服务端模式已就绪」。
 
-```bash
-node scripts/install.mjs --st /path/to/SillyTavern
-```
+## 首次配置
 
-脚本不会覆盖已有安装。确需升级时先备份，再传 `--force`。完整说明见 [docs/INSTALLATION.md](docs/INSTALLATION.md)。
-
-## 使用
-
-1. 重启 SillyTavern。
-2. 打开扩展菜单中的「✦ Image Atelier」。
-3. 填写 Base URL、API Key，拉取或手动填写模型。
-4. 测试连接并保存。
+1. 保持运行模式为「免服务端直连（推荐，一键安装）」。
+2. 填写 OpenAI Images 兼容中转站的 Base URL 和 API Key。
+3. 点击「拉取模型」；如果中转站不提供模型列表，可手动填写模型名。
+4. 点击「测试连接」并保存。
 5. 让 AI 回复：
 
 ```xml
@@ -48,7 +28,35 @@ node scripts/install.mjs --st /path/to/SillyTavern
 </draw>
 ```
 
-默认手动点击生成；自动开关默认关闭。
+默认手动点击生成；自动生图默认关闭。
+
+## 主要能力
+
+- 一条消息可含多个独立 `<draw>` 标签。
+- 同一标签可反复生成，历史结果全部保留。
+- 自动生图使用固定 `auto:<tagId>`，刷新、切换聊天和重启不会重新提交。
+- URL 与 Base64 返回都会立即上传到当前 SillyTavern 用户的图片目录。
+- 单预设配置、模型拉取、连接测试、中文错误信息。
+- 时间倒序画廊、原图下载和墓碑删除。
+- 深浅主题与移动端布局。
+- 可选 Server Plugin 增强模式保留服务端密钥、进程锁和独立 JSON 元数据。
+
+## 免服务端模式的网络要求
+
+浏览器会直接请求中转站，因此中转站必须允许 SillyTavern 页面来源进行 CORS 跨域访问。若连接测试提示“浏览器无法连接”，请检查：
+
+- Base URL 是否正确；
+- 手机能否访问该地址；
+- 中转站是否返回 `Access-Control-Allow-Origin`；
+- HTTPS 页面是否请求了被浏览器拦截的 HTTP 地址。
+
+API Key 保存在当前 SillyTavern 账户的前端账户存储中，不写入聊天消息、图片元数据、日志或 Git 仓库。由于请求发生在浏览器中，其他同源前端扩展理论上仍可访问请求数据；高安全需求请使用可选 Server Plugin 模式。
+
+如果生成接口能连接，但返回的临时图片 URL 被 CORS 阻止，可在高级设置的额外参数中尝试填写 `{"response_format":"b64_json"}`，让兼容中转站直接返回 Base64。
+
+## 可选增强模式
+
+仓库仍包含 `server-plugin/`。它适用于不支持 CORS 的中转站，或必须把完整 Key 与生成幂等锁留在服务端的部署。安装方法见 [docs/INSTALLATION.md](docs/INSTALLATION.md)。普通用户无需安装。
 
 ## 测试
 
@@ -57,18 +65,6 @@ node --test
 node scripts/verify-install.mjs --self
 ```
 
-测试使用本地 mock upstream，不读取也不需要真实 API Key。
-
-## 安全说明
-
-- Key 仅保存在用户隔离的服务端 secrets 文件中。
-- 默认仅允许 HTTPS；HTTP 必须在设置中明确开启。
-- 图片限 30 MB，仅接受 PNG、JPEG、WebP。
-- 文件路径经过目录边界检查。
-- Server Plugins 具备服务端权限，请只从可信来源安装。
-
-## 当前范围
-
-这是第一期实现。多预设 UI、高级自动并发/重试、画廊高级筛选、参考图编辑、成本统计等只预留结构，不含实现。
+测试使用本地 mock upstream，不读取真实 API Key。
 
 许可证：AGPL-3.0-or-later。

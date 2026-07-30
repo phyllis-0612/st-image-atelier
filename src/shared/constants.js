@@ -1,7 +1,7 @@
 export const MODULE_NAME = 'stImageAtelier';
 export const DISPLAY_NAME = 'Image Atelier';
 export const API_ROOT = '/api/plugins/st-image-atelier';
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const ATTEMPT_STATUS = Object.freeze({
   IDLE: 'idle',
@@ -35,6 +35,7 @@ export const ERROR_CODES = Object.freeze({
   ATTEMPT_ALREADY_RUNNING: 'ATTEMPT_ALREADY_RUNNING',
   ATTEMPT_INTERRUPTED: 'ATTEMPT_INTERRUPTED',
   VALIDATION_FAILED: 'VALIDATION_FAILED',
+  DIRECT_FETCH_BLOCKED: 'DIRECT_FETCH_BLOCKED',
   SERVER_PLUGIN_UNAVAILABLE: 'SERVER_PLUGIN_UNAVAILABLE',
   NOT_FOUND: 'NOT_FOUND',
 });
@@ -42,6 +43,7 @@ export const ERROR_CODES = Object.freeze({
 export const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
   autoGenerate: false,
+  executionMode: 'direct',
   allowHttp: false,
   maxImageBytes: 30 * 1024 * 1024,
   downloadTimeoutMs: 60_000,

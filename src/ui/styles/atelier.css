@@ -146,6 +146,7 @@
 }
 
 .stia-field input:not([type="checkbox"]),
+.stia-field select,
 .stia-field textarea {
   box-sizing: border-box;
   width: 100%;

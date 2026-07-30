@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const self = args.includes('--self');
+const withServerPlugin = args.includes('--with-server-plugin');
 const stIndex = args.indexOf('--st');
 const stRoot = stIndex >= 0 ? path.resolve(args[stIndex + 1] || '') : '';
 
@@ -47,15 +48,17 @@ async function main() {
   }
   if (!stRoot) throw new Error('请传 --st /path/to/SillyTavern，或用 --self 检查源码');
   const ui = path.join(stRoot, 'public', 'scripts', 'extensions', 'third-party', 'st-image-atelier');
-  const plugin = path.join(stRoot, 'plugins', 'st-image-atelier');
   const count = await verifySource(ui);
-  await must(path.join(plugin, 'index.js'));
-  await must(path.join(plugin, 'src', 'routes', 'index.js'));
-  const config = await fs.readFile(path.join(stRoot, 'config.yaml'), 'utf8').catch(() => '');
-  const enabled = /^enableServerPlugins:\s*true\s*$/mi.test(config);
-  console.log(`安装自检通过：${count + 2} 个关键文件`);
-  console.log(enabled ? 'Server Plugins 已启用' : '警告：Server Plugins 未启用');
-  if (!enabled) process.exitCode = 2;
+  console.log(`免服务端安装自检通过：${count} 个关键文件`);
+  if (withServerPlugin) {
+    const plugin = path.join(stRoot, 'plugins', 'st-image-atelier');
+    await must(path.join(plugin, 'index.js'));
+    await must(path.join(plugin, 'src', 'routes', 'index.js'));
+    const config = await fs.readFile(path.join(stRoot, 'config.yaml'), 'utf8').catch(() => '');
+    const enabled = /^enableServerPlugins:\s*true\s*$/mi.test(config);
+    console.log(enabled ? '可选 Server Plugins 已启用' : '警告：可选 Server Plugins 未启用');
+    if (!enabled) process.exitCode = 2;
+  }
 }
 
 main().catch(error => {

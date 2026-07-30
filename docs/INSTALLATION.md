@@ -1,69 +1,84 @@
 # 安装、升级与卸载
 
-## 前提
+## 推荐：酒馆内一键安装
 
-- SillyTavern 1.14.x–1.18.x
-- Node.js 18+
-- 对 SillyTavern 目录有写权限
+要求 SillyTavern 1.14.x–1.18.x。
 
-## 安装
+1. 打开 SillyTavern 扩展管理。
+2. 选择“安装扩展”。
+3. 粘贴：
+
+   ```text
+   https://github.com/phyllis-0612/st-image-atelier
+   ```
+
+4. 安装后刷新页面或重启酒馆。
+5. 打开「✦ Image Atelier」，确认状态为「免服务端模式已就绪」。
+
+该方式只安装标准 UI Extension，不修改 `config.yaml`，也不要求 `enableServerPlugins`。
+
+## 升级
+
+在 SillyTavern 的已安装扩展列表中使用更新按钮，然后刷新页面。
+
+从 1.0.0 升级到 1.1.0 后默认切换为免服务端模式。旧 Server Plugin 数据不会被删除；由于免服务端模式不会读取服务端 secrets，需要在设置中重新填写一次 API Key。
+
+## 免服务端模式说明
+
+- 生成：浏览器直接调用 OpenAI Images 兼容端点。
+- 存图：使用 SillyTavern 自带的 `/api/images/upload`。
+- 删除：使用 SillyTavern 自带的 `/api/images/delete`。
+- 卡片状态：保存在 `message.extra.stImageAtelier`。
+- 画廊索引：保存在当前用户的扩展设置中。
+- API Key：保存在当前 SillyTavern 账户的前端账户存储中。
+
+中转站必须支持 CORS。Base URL 是 HTTPS 时无需额外设置；HTTP 默认禁止，只应在可信本地网络中手动开启。
+
+## 可选：Server Plugin 增强模式
+
+只有以下情况需要：
+
+- 中转站不支持 CORS；
+- 不允许 Key 进入浏览器运行时；
+- 需要服务端进程锁、原子 JSON 元数据和更强的跨标签页幂等。
+
+在 SillyTavern 主机上运行：
+
+```bash
+node scripts/install.mjs \
+  --st /path/to/SillyTavern \
+  --with-server-plugin \
+  --enable-server-plugins
+```
+
+脚本会先备份 `config.yaml`，再安装 UI 与可选 Server Plugin。重启后在设置中把运行模式改为「Server Plugin 增强模式」。
+
+验证增强模式：
+
+```bash
+node scripts/verify-install.mjs \
+  --st /path/to/SillyTavern \
+  --with-server-plugin
+```
+
+## 本地脚本的普通安装
+
+如果不能使用酒馆安装界面，也可只安装普通扩展：
 
 ```bash
 node scripts/install.mjs --st /path/to/SillyTavern
 ```
 
-脚本验证 `package.json` 版本，并复制：
-
-- UI：`public/scripts/extensions/third-party/st-image-atelier`
-- 服务端：`plugins/st-image-atelier`
-
-已有目标默认拒绝覆盖。升级前自行备份数据，然后：
-
-```bash
-node scripts/install.mjs --st /path/to/SillyTavern --force
-```
-
-如希望脚本修改 `config.yaml`，显式传：
-
-```bash
-node scripts/install.mjs --st /path/to/SillyTavern --enable-server-plugins
-```
-
-该模式先创建带时间戳的 `config.yaml.stia-backup-*`，再把 `enableServerPlugins` 改为 `true`。不传该参数时脚本只检查并提示。
-
-## 重启
-
-在 SillyTavern 根目录：
-
-```bash
-npm start
-```
-
-Termux 常见方式同样是 `npm start`；Windows 启动脚本用户也可关闭原窗口后重新运行 `Start.bat`。
-
-## 验证
-
-```bash
-node scripts/verify-install.mjs --st /path/to/SillyTavern
-```
-
-进入 ST 后，扩展菜单应出现「✦ Image Atelier」，打开后健康状态应显示「服务端已连接」。
-
-## 首次配置
-
-1. 填写 Base URL。
-2. 填写 API Key。
-3. 点击「拉取模型」；失败时可手动输入模型。
-4. 点击「测试连接」。
-5. 保存设置。
-6. 自动生图默认关闭，建议先用 mock/低成本模型手动验证。
+此命令不会安装 Server Plugin。
 
 ## 卸载
+
+推荐直接在 SillyTavern 的扩展管理中删除扩展。图片位于当前用户图片目录的 `st-image-atelier` 子目录；扩展删除不会自动删除历史图片。
+
+源码仓库也提供主机端卸载脚本：
 
 ```bash
 node scripts/uninstall.mjs --st /path/to/SillyTavern
 ```
 
-默认只移除 UI 和 Server Plugin 代码，保留用户数据。确认不要历史图片和配置时添加 `--purge-data`；数据删除不可恢复。
-
-回滚 `config.yaml` 时，把对应 `config.yaml.stia-backup-*` 复制回 `config.yaml` 后重启。
+它会移除 UI 和可能存在的可选 Server Plugin，但默认保留用户图片与旧版服务端数据。
