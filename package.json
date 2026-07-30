@@ -1,0 +1,17 @@
+{
+  "name": "st-image-atelier",
+  "version": "1.0.0",
+  "description": "SillyTavern 1.14-1.18 image generation extension with local persistence",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "test:unit": "node --test tests/unit",
+    "test:integration": "node --test tests/integration",
+    "verify": "node scripts/verify-install.mjs --self"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "AGPL-3.0-or-later"
+}

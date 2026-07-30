@@ -1,0 +1,134 @@
+import {
+  eventSource,
+  event_types,
+  getRequestHeaders,
+  saveChatConditional,
+} from '../../../../script.js';
+import { getContext } from '../../../extensions.js';
+import { createStCompat } from './src/ui/compat/st-api.js';
+import { createApiClient } from './src/ui/api/client.js';
+import { createStore } from './src/ui/state/store.js';
+import { createAutoQueue } from './src/ui/state/auto-queue.js';
+import { createMessageRenderer } from './src/ui/renderer/message-renderer.js';
+import { createMessageEvents } from './src/ui/events/message-events.js';
+import { createToolPanel } from './src/ui/pages/settings/settings.js';
+
+const compat = createStCompat({
+  getContext,
+  eventSource,
+  eventTypes: event_types,
+  saveChatConditional,
+  getRequestHeaders,
+});
+const api = createApiClient(compat);
+const store = createStore();
+store.subscribe(state => {
+  document.documentElement.classList.toggle('stia-disabled', !state.settings.enabled);
+});
+const activeTags = new Set();
+
+function uuid() {
+  return globalThis.crypto?.randomUUID?.()
+    || `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}-4000-8000-${Math.random().toString(16).slice(2).padEnd(12, '0').slice(0, 12)}`;
+}
+
+async function waitForAttempt(attemptId, tagId) {
+  for (;;) {
+    const attempt = await api.attempt(attemptId);
+    const current = store.state.tagStates.get(tagId) || { tagId, attempts: [], results: [] };
+    store.setTag(tagId, { ...current, attempts: [attempt, ...(current.attempts || []).filter(item => item.attemptId !== attemptId)] });
+    if (['succeeded', 'failed', 'interrupted', 'cancelled'].includes(attempt.status)) {
+      const [resolved] = await api.resolveTags([tagId]);
+      store.setTag(tagId, resolved);
+      return attempt;
+    }
+    await new Promise(resolve => setTimeout(resolve, 900));
+  }
+}
+
+async function generate(tag, mode) {
+  if (activeTags.has(tag.tagId)) return;
+  activeTags.add(tag.tagId);
+  const attemptId = mode === 'auto' ? `auto:${tag.tagId}` : uuid();
+  const queued = {
+    attemptId,
+    tagId: tag.tagId,
+    requestMode: mode,
+    model: store.state.preset?.selectedModel || '',
+    status: 'queued',
+    createdAt: new Date().toISOString(),
+  };
+  const current = store.state.tagStates.get(tag.tagId) || { tagId: tag.tagId, attempts: [], results: [] };
+  store.setTag(tag.tagId, { ...current, attempts: [queued, ...(current.attempts || [])] });
+  try {
+    const attempt = await api.generate({
+      tagId: tag.tagId,
+      attemptId,
+      requestMode: mode,
+      presetId: 'default',
+      prompt: tag.prompt,
+      chatId: tag.chatId || compat.currentChatId(),
+      messageUuid: tag.messageUuid,
+      tagOrdinal: tag.ordinal,
+      parameters: {
+        ratio: tag.ratio,
+        quality: tag.quality,
+        count: tag.count,
+      },
+    });
+    return await waitForAttempt(attempt.attemptId, tag.tagId);
+  } catch (error) {
+    queued.status = 'failed';
+    queued.errorCode = error.code;
+    queued.errorMessage = error.message;
+    store.setTag(tag.tagId, { ...current, attempts: [queued, ...(current.attempts || [])] });
+    throw error;
+  } finally {
+    activeTags.delete(tag.tagId);
+  }
+}
+
+const autoQueue = createAutoQueue(generate);
+let panel;
+const actions = {
+  generate,
+  cancel: async attemptId => {
+    await api.cancel(attemptId);
+    const entry = [...store.state.tagStates.values()]
+      .find(value => value.attempts?.some(attempt => attempt.attemptId === attemptId));
+    const tagId = entry?.tagId;
+    if (tagId) {
+      const [resolved] = await api.resolveTags([tagId]);
+      store.setTag(tagId, resolved);
+    }
+  },
+  openGallery: () => panel.show('gallery'),
+};
+const renderer = createMessageRenderer({ compat, api, store, actions });
+const events = createMessageEvents({ compat, api, store, renderer, autoQueue });
+
+function installToolButton() {
+  const button = document.createElement('button');
+  button.id = 'stia-open';
+  button.type = 'button';
+  button.className = 'list-group-item flex-container flexGap5 stia-tool-button';
+  button.setAttribute('aria-label', '打开 Image Atelier');
+  button.textContent = '✦ Image Atelier';
+  button.addEventListener('click', () => panel.show());
+  const menu = document.querySelector('#extensionsMenu, #extensions_settings');
+  (menu || document.body).append(button);
+  if (!menu) button.classList.add('stia-tool-button--floating');
+}
+
+function initialize() {
+  panel = createToolPanel({ api, store });
+  installToolButton();
+  events.bind();
+  void events.hydrate();
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initialize, { once: true });
+} else {
+  initialize();
+}
