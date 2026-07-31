@@ -10,6 +10,48 @@ export function findDrawMarkupSpans(text) {
   return spans;
 }
 
+function normalizeWithOffsets(value) {
+  const text = String(value || '');
+  let normalized = '';
+  const starts = [];
+  const ends = [];
+  let pendingWhitespace = null;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (/\s/.test(character)) {
+      if (normalized && !normalized.endsWith(' ')) {
+        pendingWhitespace ??= index;
+      }
+      continue;
+    }
+    if (pendingWhitespace != null) {
+      normalized += ' ';
+      starts.push(pendingWhitespace);
+      ends.push(index);
+      pendingWhitespace = null;
+    }
+    normalized += character;
+    starts.push(index);
+    ends.push(index + 1);
+  }
+  return { normalized, starts, ends };
+}
+
+export function findNormalizedTextSpan(text, needle, from = 0) {
+  const source = normalizeWithOffsets(text);
+  const target = normalizeWithOffsets(needle).normalized;
+  if (!target) return null;
+  const normalizedStart = source.normalized.indexOf(target, Math.max(0, from));
+  if (normalizedStart < 0) return null;
+  const normalizedEnd = normalizedStart + target.length;
+  return {
+    start: source.starts[normalizedStart],
+    end: source.ends[normalizedEnd - 1],
+    normalizedStart,
+    normalizedEnd,
+  };
+}
+
 function visibleTextNodes(container) {
   const nodes = [];
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
@@ -24,11 +66,13 @@ function visibleTextNodes(container) {
   return nodes;
 }
 
-function boundaryAt(nodes, absoluteOffset) {
+function boundaryAt(nodes, absoluteOffset, side = 'start') {
   let traversed = 0;
-  for (const node of nodes) {
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
     const next = traversed + node.data.length;
-    if (absoluteOffset <= next) {
+    const isSharedBoundary = absoluteOffset === next && index < nodes.length - 1;
+    if (absoluteOffset < next || (absoluteOffset === next && (side === 'end' || !isSharedBoundary))) {
       return { node, offset: Math.max(0, absoluteOffset - traversed) };
     }
     traversed = next;
@@ -41,14 +85,39 @@ function textRanges(container) {
   const nodes = visibleTextNodes(container);
   const combined = nodes.map(node => node.data).join('');
   return findDrawMarkupSpans(combined).map(span => {
-    const start = boundaryAt(nodes, span.start);
-    const end = boundaryAt(nodes, span.end);
+    const start = boundaryAt(nodes, span.start, 'start');
+    const end = boundaryAt(nodes, span.end, 'end');
     if (!start || !end) return null;
     const range = document.createRange();
     range.setStart(start.node, start.offset);
     range.setEnd(end.node, end.offset);
     return { range, raw: span.raw };
   }).filter(Boolean);
+}
+
+function promptRanges(container, tags) {
+  const nodes = visibleTextNodes(container);
+  const combined = nodes.map(node => node.data).join('');
+  const normalized = normalizeWithOffsets(combined);
+  let cursor = 0;
+  return tags.map(tag => {
+    const target = normalizeWithOffsets(tag.prompt).normalized;
+    if (!target) return null;
+    let normalizedStart = normalized.normalized.indexOf(target, cursor);
+    if (normalizedStart < 0) normalizedStart = normalized.normalized.indexOf(target);
+    if (normalizedStart < 0) return null;
+    const normalizedEnd = normalizedStart + target.length;
+    cursor = normalizedEnd;
+    const startOffset = normalized.starts[normalizedStart];
+    const endOffset = normalized.ends[normalizedEnd - 1];
+    const start = boundaryAt(nodes, startOffset, 'start');
+    const end = boundaryAt(nodes, endOffset, 'end');
+    if (!start || !end) return null;
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    return { range, raw: tag.prompt };
+  });
 }
 
 function comparableText(value) {
@@ -135,6 +204,24 @@ export function createMessageRenderer(dependencies) {
     mounted += replacements.length;
     const mountedIds = new Set(replacements.map(item => item.tag.tagId));
     unresolved = unresolved.filter(({ tag }) => !mountedIds.has(tag.tagId)
+      && !container.querySelector(`.stia-card[data-tag-id="${CSS.escape(tag.tagId)}"]`));
+    if (!unresolved.length) return { mounted, fallback: 0 };
+
+    const promptMatches = promptRanges(container, unresolved.map(item => item.tag));
+    const promptReplacements = unresolved
+      .map(({ tag }, index) => ({
+        tag,
+        range: promptMatches[index]?.range,
+        raw: promptMatches[index]?.raw,
+      }))
+      .filter(item => item.range);
+    for (const { tag, range, raw } of promptReplacements.reverse()) {
+      const card = makeCard(tag);
+      replaceRange(range, card.root, raw);
+    }
+    mounted += promptReplacements.length;
+    const promptMountedIds = new Set(promptReplacements.map(item => item.tag.tagId));
+    unresolved = unresolved.filter(({ tag }) => !promptMountedIds.has(tag.tagId)
       && !container.querySelector(`.stia-card[data-tag-id="${CSS.escape(tag.tagId)}"]`));
     if (!unresolved.length) return { mounted, fallback: 0 };
 

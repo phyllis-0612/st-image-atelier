@@ -107,6 +107,23 @@ test('上游 HTTP 错误展示真实原因并隐藏密钥', async t => {
   );
 });
 
+test('上游内容审核拒绝显示针对性提示', async t => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    error: {
+      message: 'Content was rejected by upstream moderation. Please adjust your input and try again.',
+    },
+  }), { status: 400 });
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  await assert.rejects(
+    fetchJson('https://api.example.com/v1/images/generations', {}, 1000),
+    error => error.code === 'UPSTREAM_HTTP_ERROR'
+      && /内容审核拒绝/.test(error.message)
+      && !/关闭 size/.test(error.message),
+  );
+});
+
 test('浏览器 Base64 转换与图片 magic bytes 校验', () => {
   const bytes = base64ToBytes(PNG_BASE64);
   assert.equal(detectImageType(bytes)?.extension, 'png');

@@ -142,11 +142,15 @@ function mapStatus(status, bodyText) {
       `API 限流（HTTP 429）：${reason}`,
     );
   }
+  const moderationRejected = /moderation|content (?:was )?rejected|safety|content policy|内容审核|内容政策/i
+    .test(reason);
   const hint = status === 404
     ? '；请检查“生图路径”是否与该 API 一致'
-    : status === 400
-      ? '；若上游提示参数不支持，可在“高级设置”关闭 size、quality 或 n'
-      : '';
+    : moderationRejected
+      ? '；提示词被上游内容审核拒绝，请减少强迫、暴力、露骨或高风险内容后重试'
+      : status === 400
+        ? '；若上游提示参数不支持，可在“高级设置”关闭 size、quality 或 n'
+        : '';
   return new DirectError(
     'UPSTREAM_HTTP_ERROR',
     reason,
