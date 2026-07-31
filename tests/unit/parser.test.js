@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseDrawTags, shouldProcessMessage } from '../../src/ui/parser/draw-parser.js';
+import { hasChangedDrawSource } from '../../src/ui/events/message-events.js';
+import { findDrawMarkupSpans } from '../../src/ui/renderer/message-renderer.js';
 
 test('解析单标签、多行与前后正文', () => {
   const tags = parseDrawTags('正文\n<draw>\n一只猫\n在窗边\n</draw>\n结尾');
@@ -35,4 +37,22 @@ test('只处理普通 AI 消息', () => {
   assert.equal(shouldProcessMessage({ is_user: false, mes: '<draw>x</draw>' }), true);
   assert.equal(shouldProcessMessage({ is_user: true, mes: '<draw>x</draw>' }), false);
   assert.equal(shouldProcessMessage({ is_user: false, is_system: true, mes: '<draw>x</draw>' }), false);
+});
+
+test('渲染文字中的 draw 标签可按原始位置定位', () => {
+  const text = '开头 <draw ratio="portrait">一只猫</draw> 中间 <draw>一只狗</draw> 结尾';
+  const spans = findDrawMarkupSpans(text);
+  assert.equal(spans.length, 2);
+  assert.equal(text.slice(spans[0].start, spans[0].end), '<draw ratio="portrait">一只猫</draw>');
+  assert.equal(text.slice(spans[1].start, spans[1].end), '<draw>一只狗</draw>');
+});
+
+test('正文完成后追加 draw 标签会被识别为新来源', () => {
+  const previous = '正文已经生成完成。';
+  const message = {
+    is_user: false,
+    mes: `${previous}\n<draw>稍后追加的生图提示词</draw>`,
+  };
+  assert.equal(hasChangedDrawSource(message, previous), true);
+  assert.equal(hasChangedDrawSource(message, message.mes), false);
 });

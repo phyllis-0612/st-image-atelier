@@ -52,8 +52,10 @@ export function createStCompat(dependencies) {
   }
 
   function on(names, handler) {
-    const selected = event(...names);
-    if (selected && eventSource?.on) eventSource.on(selected, handler);
+    const selected = [...new Set(names.map(name => eventTypes?.[name]).filter(Boolean))];
+    if (eventSource?.on) {
+      for (const eventName of selected) eventSource.on(eventName, handler);
+    }
     return selected;
   }
 

@@ -1,10 +1,25 @@
 import { parseDrawTags, shouldProcessMessage } from '../parser/draw-parser.js';
 import { reconcileTagMetadata } from '../state/tag-identity.js';
 
+export function hasChangedDrawSource(message, previousSource) {
+  return shouldProcessMessage(message)
+    && message.mes !== previousSource
+    && /<draw\b/i.test(message.mes);
+}
+
 export function createMessageEvents({ compat, api, store, renderer, autoQueue }) {
+  const sourceCache = new Map();
+  const scheduled = new Map();
+  let observer = null;
+  let observedChat = null;
+  let pollTimer = null;
+  let hydrated = false;
+  let cachedChatId = '';
+
   async function processMessage(messageId, { live = false, generationType = '' } = {}) {
     const message = compat.chat()[Number(messageId)];
     if (!shouldProcessMessage(message)) return;
+    sourceCache.set(String(messageId), message.mes);
     const parsed = parseDrawTags(message.mes);
     if (!parsed.length) return;
 
@@ -47,11 +62,80 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
   }
 
   async function hydrate() {
+    hydrated = false;
+    cachedChatId = compat.currentChatId();
+    sourceCache.clear();
     const chat = compat.chat();
     const ids = chat.map((_, index) => index);
     for (const messageId of ids) {
       await processMessage(messageId, { live: false });
     }
+    hydrated = true;
+  }
+
+  function scheduleMessage(messageId, options = {}) {
+    const id = String(messageId ?? '');
+    if (!/^\d+$/.test(id)) return;
+    clearTimeout(scheduled.get(id));
+    const timer = setTimeout(() => {
+      scheduled.delete(id);
+      void processMessage(id, options).catch(error => {
+        console.error('[Image Atelier] 实时识别生图标签失败', error);
+      });
+    }, 80);
+    scheduled.set(id, timer);
+  }
+
+  function messageIdFromNode(node) {
+    const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+    return element?.closest?.('#chat .mes[mesid]')?.getAttribute('mesid') ?? null;
+  }
+
+  function observeChat() {
+    const chatElement = document.querySelector('#chat');
+    if (!chatElement || chatElement === observedChat) return;
+    observer?.disconnect();
+    observedChat = chatElement;
+    observer = new MutationObserver(records => {
+      const ids = new Set();
+      for (const record of records) {
+        const targetElement = record.target?.nodeType === Node.ELEMENT_NODE
+          ? record.target
+          : record.target?.parentElement;
+        if (targetElement?.closest?.('.stia-card')) continue;
+        const id = messageIdFromNode(record.target);
+        if (id != null) ids.add(id);
+        for (const node of record.addedNodes || []) {
+          if (node.nodeType === Node.ELEMENT_NODE && node.matches?.('.stia-card, .stia-card-list')) {
+            continue;
+          }
+          const addedId = messageIdFromNode(node);
+          if (addedId != null) ids.add(addedId);
+        }
+      }
+      for (const id of ids) scheduleMessage(id, { live: hydrated });
+    });
+    observer.observe(chatElement, { childList: true, characterData: true, subtree: true });
+  }
+
+  function scanChangedSources() {
+    if (!hydrated) return;
+    const chatId = compat.currentChatId();
+    if (chatId !== cachedChatId) {
+      cachedChatId = chatId;
+      void hydrate();
+      return;
+    }
+    compat.chat().forEach((message, messageId) => {
+      if (!shouldProcessMessage(message)) return;
+      const id = String(messageId);
+      const previousSource = sourceCache.get(id);
+      if (previousSource === message.mes) return;
+      sourceCache.set(id, message.mes);
+      if (hasChangedDrawSource(message, previousSource)) {
+        scheduleMessage(id, { live: true });
+      }
+    });
   }
 
   function bind() {
@@ -62,8 +146,13 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
     compat.on(['MESSAGE_UPDATED', 'MESSAGE_EDITED'], messageId =>
       processMessage(messageId, { live: false }));
     compat.on(['CHAT_CHANGED'], () => {
-      queueMicrotask(() => hydrate());
+      queueMicrotask(() => {
+        observeChat();
+        void hydrate();
+      });
     });
+    observeChat();
+    if (!pollTimer) pollTimer = setInterval(scanChangedSources, 500);
   }
 
   return { processMessage, hydrate, bind };
