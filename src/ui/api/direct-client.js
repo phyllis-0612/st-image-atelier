@@ -198,7 +198,9 @@ export function createDirectApiClient({
     };
   }
 
-  async function persistAttempt(found, attempt) {
+  async function persistAttempt(fallbackFound, attempt) {
+    const found = findTag(attempt.tagId) || fallbackFound;
+    if (!found) throw new DirectError('VALIDATION_FAILED', '找不到对应的生图标签');
     found.tag.attempts ??= [];
     const index = found.tag.attempts.findIndex(item => item.attemptId === attempt.attemptId);
     if (index >= 0) found.tag.attempts[index] = clone(attempt);
@@ -206,6 +208,7 @@ export function createDirectApiClient({
     found.tag.attempts = found.tag.attempts.slice(0, 50);
     if (attempt.requestMode === 'auto') found.tag.autoAttempted = true;
     await compat.save();
+    return found;
   }
 
   async function requestSt(path, body) {
@@ -348,7 +351,7 @@ export function createDirectApiClient({
   }
 
   async function generate(input) {
-    const found = findTag(input.tagId);
+    let found = findTag(input.tagId);
     if (!found) throw new DirectError('VALIDATION_FAILED', '找不到对应的生图标签');
     const existing = found.tag.attempts?.find(item => item.attemptId === input.attemptId);
     if (existing) return clone(existing);
@@ -374,18 +377,19 @@ export function createDirectApiClient({
       schemaVersion: SCHEMA_VERSION,
     };
 
+    const controller = new AbortController();
+    controllers.set(attempt.attemptId, controller);
     try {
-      await persistAttempt(found, attempt);
+      found = await persistAttempt(found, attempt);
     } catch (error) {
+      controllers.delete(attempt.attemptId);
       throw new DirectError('LOCAL_SAVE_FAILED', `无法在扣费前保存防重复记录：${error.message}`);
     }
 
-    const controller = new AbortController();
-    controllers.set(attempt.attemptId, controller);
     const saved = [];
     try {
       attempt.status = 'generating';
-      await persistAttempt(found, attempt);
+      found = await persistAttempt(found, attempt);
       const sources = await generateImages({
         preset,
         apiKey,
@@ -396,14 +400,15 @@ export function createDirectApiClient({
       });
 
       attempt.status = 'downloading';
-      await persistAttempt(found, attempt);
+      found = await persistAttempt(found, attempt);
       for (const source of sources) {
         if (controller.signal.aborted) throw controller.signal.reason || new Error('cancelled');
         saved.push(await saveSource(source, input, attempt, controller.signal));
       }
 
       attempt.status = 'saving';
-      await persistAttempt(found, attempt);
+      found = await persistAttempt(found, attempt);
+      found = findTag(input.tagId) || found;
       found.tag.results ??= [];
       found.tag.results.push(...saved);
       found.tag.resultIds = found.tag.results
@@ -415,7 +420,7 @@ export function createDirectApiClient({
       attempt.status = 'succeeded';
       attempt.resultIds = saved.map(result => result.resultId);
       attempt.completedAt = now();
-      await persistAttempt(found, attempt);
+      found = await persistAttempt(found, attempt);
       await savePreferences();
       return clone(attempt);
     } catch (error) {
@@ -494,7 +499,7 @@ export function createDirectApiClient({
     mode: () => namespace.settings.executionMode || 'direct',
     health: async () => ({
       mode: 'direct',
-      version: '1.3.3',
+      version: '1.3.4',
       corsRequired: true,
       storage: 'sillytavern-images',
     }),

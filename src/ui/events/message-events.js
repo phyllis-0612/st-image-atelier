@@ -1,6 +1,9 @@
 import { parseDrawTags, shouldProcessMessage } from '../parser/draw-parser.js';
 import { reconcileTagMetadata } from '../state/tag-identity.js';
 
+const DOM_SETTLE_MS = 140;
+const SOURCE_SCAN_INTERVAL_MS = 1_500;
+
 export function hasChangedDrawSource(message, previousSource) {
   return shouldProcessMessage(message)
     && message.mes !== previousSource
@@ -76,14 +79,20 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
   function scheduleMessage(messageId, options = {}) {
     const id = String(messageId ?? '');
     if (!/^\d+$/.test(id)) return;
-    clearTimeout(scheduled.get(id));
+    const previous = scheduled.get(id);
+    clearTimeout(previous?.timer);
+    const mergedOptions = {
+      ...previous?.options,
+      ...options,
+      live: Boolean(previous?.options?.live || options.live),
+    };
     const timer = setTimeout(() => {
       scheduled.delete(id);
-      void processMessage(id, options).catch(error => {
+      void processMessage(id, mergedOptions).catch(error => {
         console.error('[Image Atelier] 实时识别生图标签失败', error);
       });
-    }, 80);
-    scheduled.set(id, timer);
+    }, DOM_SETTLE_MS);
+    scheduled.set(id, { timer, options: mergedOptions });
   }
 
   function messageIdFromNode(node) {
@@ -152,7 +161,7 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
       });
     });
     observeChat();
-    if (!pollTimer) pollTimer = setInterval(scanChangedSources, 500);
+    if (!pollTimer) pollTimer = setInterval(scanChangedSources, SOURCE_SCAN_INTERVAL_MS);
   }
 
   return { processMessage, hydrate, bind };

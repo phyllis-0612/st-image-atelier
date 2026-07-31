@@ -6,7 +6,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "phyllis-0612",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "homePage": "https://github.com/phyllis-0612/st-image-atelier",
   "auto_update": true,
   "minimum_client_version": "1.14.0"

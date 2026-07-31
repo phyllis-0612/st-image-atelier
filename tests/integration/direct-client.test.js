@@ -143,6 +143,100 @@ test('仓库链接直装模式完成生成、幂等、画廊与删除', async t 
   });
 });
 
+test('保存触发消息重绘时不会把当前自动任务误判为 interrupted', async t => {
+  const upstream = await startMockUpstream();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if (url === '/api/images/upload') {
+      const body = JSON.parse(options.body);
+      return response(200, { path: `user/images/st-image-atelier/${body.filename}.${body.format}` });
+    }
+    return originalFetch(url, options);
+  };
+
+  const tagId = crypto.randomUUID();
+  const messageUuid = crypto.randomUUID();
+  const message = {
+    is_user: false,
+    mes: '<draw>base64</draw>',
+    extra: {
+      stImageAtelier: {
+        messageUuid,
+        schemaVersion: 2,
+        tags: [{
+          tagId,
+          prompt: 'base64',
+          ordinal: 0,
+          count: 1,
+          attempts: [],
+          results: [],
+          resultIds: [],
+          latestResultId: null,
+          autoAttempted: false,
+          autoSuppressed: false,
+        }],
+      },
+    },
+  };
+  const storage = new Map();
+  const observedStatuses = [];
+  let client;
+  let resolving = false;
+  const compat = {
+    chat: () => [message],
+    save: async () => {
+      message.extra.stImageAtelier = structuredClone(message.extra.stImageAtelier);
+      if (!client || resolving) return;
+      resolving = true;
+      try {
+        const [state] = await client.resolveTags([tagId]);
+        observedStatuses.push(state.attempts[0]?.status || 'none');
+      } finally {
+        resolving = false;
+      }
+    },
+    headers: () => ({ 'Content-Type': 'application/json', 'X-CSRF-Token': 'test' }),
+  };
+  client = createDirectApiClient({
+    compat,
+    extensionSettings: {},
+    saveSettingsDebounced: () => {},
+    keyStorage: {
+      getItem: key => storage.get(key) || null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: key => storage.delete(key),
+    },
+  });
+  await client.updateSettings({ allowHttp: true });
+  await client.updatePreset({
+    baseUrl: upstream.baseUrl,
+    apiKey: 'sk-test',
+    selectedModel: 'gpt-image-1',
+  });
+
+  const attempt = await client.generate({
+    tagId,
+    attemptId: `auto:${tagId}`,
+    requestMode: 'auto',
+    prompt: 'base64',
+    chatId: 'chat-1',
+    messageUuid,
+    tagOrdinal: 0,
+    parameters: { count: 1, ratio: 'square' },
+  });
+  const [state] = await client.resolveTags([tagId]);
+  assert.equal(attempt.status, 'succeeded');
+  assert.equal(state.attempts[0].status, 'succeeded');
+  assert.equal(state.results.length, 1);
+  assert.equal(observedStatuses.includes('interrupted'), false);
+  assert.equal(upstream.state.generationCalls, 1);
+
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    await upstream.close();
+  });
+});
+
 test('旧版单预设迁移为多预设，且每个预设独立保存密钥', async () => {
   const storage = new Map([['stImageAtelier.directApiKey.v1', 'sk-legacy']]);
   const extensionSettings = {
