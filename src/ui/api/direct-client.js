@@ -494,7 +494,7 @@ export function createDirectApiClient({
     mode: () => namespace.settings.executionMode || 'direct',
     health: async () => ({
       mode: 'direct',
-      version: '1.3.2',
+      version: '1.3.3',
       corsRequired: true,
       storage: 'sillytavern-images',
     }),

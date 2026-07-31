@@ -14,6 +14,7 @@ import { createAutoQueue } from './src/ui/state/auto-queue.js';
 import { createMessageRenderer } from './src/ui/renderer/message-renderer.js';
 import { createMessageEvents } from './src/ui/events/message-events.js';
 import { createToolPanel } from './src/ui/pages/settings/settings.js';
+import { installToolMenuEntry } from './src/ui/menu/tool-menu.js';
 
 const compat = createStCompat({
   getContext,
@@ -135,16 +136,10 @@ const renderer = createMessageRenderer({ compat, api, store, actions });
 const events = createMessageEvents({ compat, api, store, renderer, autoQueue });
 
 function installToolButton() {
-  const button = document.createElement('button');
-  button.id = 'stia-open';
-  button.type = 'button';
-  button.className = 'list-group-item flex-container flexGap5 stia-tool-button';
-  button.setAttribute('aria-label', '打开 Image Atelier');
-  button.textContent = '✦ Image Atelier';
-  button.addEventListener('click', () => panel.show());
-  const menu = document.querySelector('#extensionsMenu, #extensions_settings');
-  (menu || document.body).append(button);
-  if (!menu) button.classList.add('stia-tool-button--floating');
+  installToolMenuEntry({
+    root: document,
+    onOpen: () => panel.show(),
+  });
 }
 
 function initialize() {

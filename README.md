@@ -14,6 +14,8 @@ https://github.com/phyllis-0612/st-image-atelier
 
 安装完成后刷新页面或重启 SillyTavern。扩展菜单中会出现「✦ Image Atelier」，状态应显示「免服务端模式已就绪」。
 
+也可以点击聊天输入框左下角的魔法棒按钮，在展开菜单中选择「Image Atelier」快速打开。
+
 ## 首次配置
 
 1. 保持运行模式为「免服务端直连（推荐，一键安装）」。

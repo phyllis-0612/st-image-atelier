@@ -806,14 +806,6 @@
   border-radius: 8px;
 }
 
-.stia-tool-button--floating {
-  position: fixed;
-  right: 12px;
-  bottom: 90px;
-  z-index: 1000;
-  width: auto;
-}
-
 @media (max-width: 640px) {
   .stia-overlay {
     padding: 0;
