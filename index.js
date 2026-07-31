@@ -64,16 +64,16 @@ async function generate(tag, mode) {
   if (activeTags.has(tag.tagId)) return;
   activeTags.add(tag.tagId);
   const attemptId = mode === 'auto' ? `auto:${tag.tagId}` : uuid();
-  const queued = {
+  const optimisticAttempt = {
     attemptId,
     tagId: tag.tagId,
     requestMode: mode,
     model: store.state.preset?.selectedModel || '',
-    status: 'queued',
+    status: 'generating',
     createdAt: new Date().toISOString(),
   };
   const current = store.state.tagStates.get(tag.tagId) || { tagId: tag.tagId, attempts: [], results: [] };
-  store.setTag(tag.tagId, { ...current, attempts: [queued, ...(current.attempts || [])] });
+  store.setTag(tag.tagId, { ...current, attempts: [optimisticAttempt, ...(current.attempts || [])] });
   try {
     const attempt = await api.generate({
       tagId: tag.tagId,
@@ -101,14 +101,14 @@ async function generate(tag, mode) {
     } catch {
       // Keep the local failure card below when persistence could not be restored.
     }
-    queued.status = 'failed';
-    queued.errorCode = error.code;
-    queued.errorMessage = error.message;
+    optimisticAttempt.status = 'failed';
+    optimisticAttempt.errorCode = error.code;
+    optimisticAttempt.errorMessage = error.message;
     const latest = store.state.tagStates.get(tag.tagId) || current;
     if (!(latest.attempts || []).some(item => item.attemptId === attemptId)) {
       store.setTag(tag.tagId, {
         ...latest,
-        attempts: [queued, ...(latest.attempts || [])],
+        attempts: [optimisticAttempt, ...(latest.attempts || [])],
       });
     }
     throw error;

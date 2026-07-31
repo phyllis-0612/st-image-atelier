@@ -368,7 +368,7 @@ export function createDirectApiClient({
       presetNameSnapshot: preset.name,
       model: preset.selectedModel,
       parameters: { ...clone(input.parameters || {}), size: requestedSize },
-      status: 'queued',
+      status: 'generating',
       resultIds: [],
       errorCode: null,
       errorMessage: null,
@@ -388,8 +388,6 @@ export function createDirectApiClient({
 
     const saved = [];
     try {
-      attempt.status = 'generating';
-      found = await persistAttempt(found, attempt);
       const sources = await generateImages({
         preset,
         apiKey,
@@ -499,7 +497,7 @@ export function createDirectApiClient({
     mode: () => namespace.settings.executionMode || 'direct',
     health: async () => ({
       mode: 'direct',
-      version: '1.3.4',
+      version: '1.3.5',
       corsRequired: true,
       storage: 'sillytavern-images',
     }),

@@ -229,6 +229,8 @@ test('保存触发消息重绘时不会把当前自动任务误判为 interrupte
   assert.equal(state.attempts[0].status, 'succeeded');
   assert.equal(state.results.length, 1);
   assert.equal(observedStatuses.includes('interrupted'), false);
+  assert.equal(observedStatuses.includes('queued'), false);
+  assert.equal(observedStatuses.includes('generating'), true);
   assert.equal(upstream.state.generationCalls, 1);
 
   t.after(async () => {
