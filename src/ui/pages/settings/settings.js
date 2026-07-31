@@ -1,5 +1,31 @@
 import { createGalleryPage } from '../gallery/gallery.js';
 
+export const IMAGE_SIZE_OPTIONS = Object.freeze([
+  ['auto', 'auto（由模型决定）'],
+  ['256x256', '256 × 256（方图）'],
+  ['512x512', '512 × 512（方图）'],
+  ['768x768', '768 × 768（方图）'],
+  ['1024x1024', '1024 × 1024（方图）'],
+  ['512x768', '512 × 768（竖图 2:3）'],
+  ['512x1024', '512 × 1024（竖图 1:2）'],
+  ['576x1024', '576 × 1024（竖图 9:16）'],
+  ['768x1024', '768 × 1024（竖图 3:4）'],
+  ['768x1152', '768 × 1152（竖图 2:3）'],
+  ['832x1216', '832 × 1216（竖图）'],
+  ['896x1152', '896 × 1152（竖图）'],
+  ['1024x1536', '1024 × 1536（竖图 2:3）'],
+  ['1024x1792', '1024 × 1792（竖图）'],
+  ['768x512', '768 × 512（横图 3:2）'],
+  ['1024x512', '1024 × 512（横图 2:1）'],
+  ['1024x576', '1024 × 576（横图 16:9）'],
+  ['1024x768', '1024 × 768（横图 4:3）'],
+  ['1152x768', '1152 × 768（横图 3:2）'],
+  ['1216x832', '1216 × 832（横图）'],
+  ['1152x896', '1152 × 896（横图）'],
+  ['1536x1024', '1536 × 1024（横图 3:2）'],
+  ['1792x1024', '1792 × 1024（横图）'],
+]);
+
 function field(labelText, control) {
   const label = document.createElement('label');
   label.className = 'stia-field';
@@ -88,16 +114,7 @@ export function createToolPanel({ api, store }) {
   modelsPath.placeholder = '/v1/models';
   const generationPath = input();
   generationPath.placeholder = '/v1/images/generations';
-  const defaultSize = select([
-    ['auto', 'auto'],
-    ['1024x1024', '1024 × 1024'],
-    ['1024x1536', '1024 × 1536'],
-    ['1536x1024', '1536 × 1024'],
-    ['1024x1792', '1024 × 1792'],
-    ['1792x1024', '1792 × 1024'],
-    ['512x512', '512 × 512'],
-    ['256x256', '256 × 256'],
-  ]);
+  const defaultSize = select(IMAGE_SIZE_OPTIONS);
   const defaultQuality = select([
     ['auto', 'auto'],
     ['low', 'low'],
@@ -402,8 +419,13 @@ export function createToolPanel({ api, store }) {
   generationTitle.innerHTML = '<span aria-hidden="true">▧</span> 生图参数';
   const generationGrid = document.createElement('div');
   generationGrid.className = 'stia-form-grid stia-form-grid--compact';
+  const defaultSizeField = field('默认尺寸', defaultSize);
+  const sizeDescription = document.createElement('small');
+  sizeDescription.className = 'stia-muted';
+  sizeDescription.textContent = '不同模型支持的尺寸可能不同；若上游拒绝，请换用该模型支持的尺寸或 auto。';
+  defaultSizeField.append(sizeDescription);
   generationGrid.append(
-    field('默认尺寸', defaultSize),
+    defaultSizeField,
     field('默认质量', defaultQuality),
     field('默认数量', defaultCount),
   );
