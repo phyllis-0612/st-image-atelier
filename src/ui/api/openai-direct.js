@@ -91,6 +91,12 @@ export function parseModelsResponse(payload) {
     .filter(item => item.id);
 }
 
+export function normalizeImageSize(value) {
+  return String(value || '')
+    .trim()
+    .replace(/(\d)\s*[×✕✖＊*X]\s*(\d)/g, '$1x$2');
+}
+
 function sanitizeUpstreamText(value) {
   return String(value || '')
     .replace(/\bBearer\s+[^\s"',}]+/gi, 'Bearer [已隐藏]')
@@ -191,12 +197,13 @@ export async function generateImages({ preset, apiKey, prompt, parameters, setti
   const endpoint = normalizeEndpoint(preset.baseUrl, preset.generationPath);
   validateEndpoint(endpoint, settings.allowHttp);
   const body = { model: preset.selectedModel, prompt: prompt.trim() };
-  if (preset.sendSize) body.size = parameters.size || preset.defaultSize;
+  if (preset.sendSize) body.size = normalizeImageSize(parameters.size || preset.defaultSize);
   if (preset.sendQuality) body.quality = parameters.quality || preset.defaultQuality;
   if (preset.sendN) body.n = parameters.count || preset.defaultCount;
   Object.assign(body, preset.extraBody || {}, parameters.extraBody || {});
   body.model = preset.selectedModel;
   body.prompt = prompt.trim();
+  if ('size' in body) body.size = normalizeImageSize(body.size);
   const payload = await fetchJson(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authorization(apiKey) },

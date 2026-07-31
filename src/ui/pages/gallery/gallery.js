@@ -12,6 +12,13 @@ function formatDate(value) {
 export function createGalleryPage(api) {
   const root = document.createElement('section');
   root.className = 'stia-gallery-page';
+  const heading = document.createElement('div');
+  heading.className = 'stia-gallery-heading';
+  const title = document.createElement('strong');
+  title.textContent = '▦  画廊';
+  const count = document.createElement('span');
+  count.textContent = '0 张';
+  heading.append(title, count);
   const grid = document.createElement('div');
   grid.className = 'stia-gallery-grid';
   const empty = document.createElement('p');
@@ -57,6 +64,7 @@ export function createGalleryPage(api) {
       try {
         await api.deleteResult(result.resultId);
         grid.querySelector(`[data-result-id="${CSS.escape(result.resultId)}"]`)?.remove();
+        count.textContent = `${grid.children.length} 张`;
         dialog.close();
         if (!grid.children.length) root.append(empty);
       } catch (error) {
@@ -106,6 +114,7 @@ export function createGalleryPage(api) {
     try {
       const page = await api.gallery({ cursor });
       page.items.forEach(addCard);
+      count.textContent = `${grid.children.length} 张`;
       cursor = page.nextCursor;
       loadMore.hidden = !cursor;
       if (!grid.children.length) root.append(empty);
@@ -119,6 +128,6 @@ export function createGalleryPage(api) {
   }
 
   loadMore.addEventListener('click', () => load());
-  root.append(grid, loadMore);
+  root.append(heading, grid, loadMore);
   return { root, load };
 }

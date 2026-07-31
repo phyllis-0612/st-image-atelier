@@ -355,6 +355,7 @@ export function createDirectApiClient({
     const preset = clone(presetById(input.presetId) || activePreset());
     if (!preset) throw new DirectError('PRESET_NOT_CONFIGURED', '找不到所选 API 预设');
     const apiKey = getApiKey(preset.id);
+    const requestedSize = preset.ratioMap?.[input.parameters?.ratio] || preset.defaultSize;
 
     const attempt = {
       attemptId: input.attemptId,
@@ -363,7 +364,7 @@ export function createDirectApiClient({
       presetId: preset.id,
       presetNameSnapshot: preset.name,
       model: preset.selectedModel,
-      parameters: clone(input.parameters || {}),
+      parameters: { ...clone(input.parameters || {}), size: requestedSize },
       status: 'queued',
       resultIds: [],
       errorCode: null,
@@ -385,13 +386,11 @@ export function createDirectApiClient({
     try {
       attempt.status = 'generating';
       await persistAttempt(found, attempt);
-      const size = preset.ratioMap?.[input.parameters?.ratio]
-        || preset.defaultSize;
       const sources = await generateImages({
         preset,
         apiKey,
         prompt: input.prompt,
-        parameters: { ...input.parameters, size },
+        parameters: attempt.parameters,
         settings: namespace.settings,
         signal: controller.signal,
       });
@@ -495,7 +494,7 @@ export function createDirectApiClient({
     mode: () => namespace.settings.executionMode || 'direct',
     health: async () => ({
       mode: 'direct',
-      version: '1.2.0',
+      version: '1.3.0',
       corsRequired: true,
       storage: 'sillytavern-images',
     }),

@@ -88,11 +88,30 @@ export function createToolPanel({ api, store }) {
   modelsPath.placeholder = '/v1/models';
   const generationPath = input();
   generationPath.placeholder = '/v1/images/generations';
-  const defaultSize = input();
-  const defaultQuality = input();
-  const defaultCount = input('number');
-  defaultCount.min = '1';
-  defaultCount.max = '4';
+  const defaultSize = select([
+    ['auto', 'auto'],
+    ['1024x1024', '1024 × 1024'],
+    ['1024x1536', '1024 × 1536'],
+    ['1536x1024', '1536 × 1024'],
+    ['1024x1792', '1024 × 1792'],
+    ['1792x1024', '1792 × 1024'],
+    ['512x512', '512 × 512'],
+    ['256x256', '256 × 256'],
+  ]);
+  const defaultQuality = select([
+    ['auto', 'auto'],
+    ['low', 'low'],
+    ['medium', 'medium'],
+    ['high', 'high'],
+    ['standard', 'standard'],
+    ['hd', 'hd'],
+  ]);
+  const defaultCount = select([
+    ['1', '1 张'],
+    ['2', '2 张'],
+    ['3', '3 张'],
+    ['4', '4 张'],
+  ]);
   const timeout = input('number');
   timeout.min = '30';
   timeout.max = '600';
@@ -165,6 +184,17 @@ export function createToolPanel({ api, store }) {
     model.value = selectedValue && values.includes(selectedValue) ? selectedValue : values[0];
   }
 
+  function setSelectValue(control, value, label = value) {
+    const normalized = String(value || '').replace(/(\d)\s*[×✕✖＊*X]\s*(\d)/g, '$1x$2');
+    if (normalized && ![...control.options].some(option => option.value === normalized)) {
+      const option = document.createElement('option');
+      option.value = normalized;
+      option.textContent = label;
+      control.append(option);
+    }
+    control.value = normalized;
+  }
+
   function loadPresetFields(preset) {
     if (!preset) return;
     activePresetId = preset.id;
@@ -173,9 +203,13 @@ export function createToolPanel({ api, store }) {
     baseUrl.value = preset.baseUrl || '';
     modelsPath.value = preset.modelsPath || '/v1/models';
     generationPath.value = preset.generationPath || '/v1/images/generations';
-    defaultSize.value = preset.defaultSize || '1024x1024';
-    defaultQuality.value = preset.defaultQuality || 'auto';
-    defaultCount.value = String(preset.defaultCount || 1);
+    setSelectValue(
+      defaultSize,
+      preset.defaultSize || '1024x1024',
+      String(preset.defaultSize || '1024x1024').replace(/x/gi, ' × '),
+    );
+    setSelectValue(defaultQuality, preset.defaultQuality || 'auto');
+    setSelectValue(defaultCount, String(preset.defaultCount || 1), `${preset.defaultCount || 1} 张`);
     timeout.value = String(Math.round((preset.timeoutMs || 180000) / 1000));
     extraBody.value = JSON.stringify(preset.extraBody || {}, null, 2);
     sendSize.checked = preset.sendSize !== false;
@@ -305,57 +339,6 @@ export function createToolPanel({ api, store }) {
     if (activePresetId === previousId) presetSelector.value = previousId;
   });
 
-  const basic = document.createElement('div');
-  basic.className = 'stia-form-grid';
-  const enabledField = field('启用扩展', enabled);
-  enabledField.classList.add('stia-field--check');
-  const autoField = field('自动生图（仅新完成消息）', autoGenerate);
-  autoField.classList.add('stia-field--check');
-  const presetField = field('API 预设', presetRow);
-  presetField.classList.add('stia-field--wide');
-  basic.append(
-    enabledField,
-    autoField,
-    field('运行模式', executionMode),
-    presetField,
-    field('预设名称', presetName),
-    field('Base URL', baseUrl),
-    field('API Key', apiKey),
-    field('模型', modelRow),
-    field('默认尺寸', defaultSize),
-    field('默认质量', defaultQuality),
-    field('默认数量', defaultCount),
-  );
-
-  const warning = document.createElement('p');
-  warning.className = 'stia-warning';
-  warning.textContent = '免服务端模式会从浏览器直连 API；每个预设的 API Key 独立保存在当前酒馆账户的前端存储中。中转站必须允许 CORS。允许 HTTP 仅适合受信任的本地服务。';
-  const advanced = document.createElement('details');
-  const advancedSummary = document.createElement('summary');
-  advancedSummary.textContent = '高级设置';
-  const advancedGrid = document.createElement('div');
-  advancedGrid.className = 'stia-form-grid';
-  for (const [labelText, control] of [
-    ['允许 HTTP', allowHttp],
-    ['发送 size', sendSize],
-    ['发送 quality', sendQuality],
-    ['发送 n', sendN],
-  ]) {
-    const item = field(labelText, control);
-    item.classList.add('stia-field--check');
-    advancedGrid.append(item);
-  }
-  advancedGrid.append(
-    field('模型列表路径', modelsPath),
-    field('生图路径', generationPath),
-    field('超时（秒）', timeout),
-    field('额外请求参数 JSON', extraBody),
-    warning,
-  );
-  advanced.append(advancedSummary, advancedGrid);
-
-  const actions = document.createElement('div');
-  actions.className = 'stia-actions';
   const save = action('保存预设', saveSettings, true);
   const test = action('测试模型接口', async () => run(test, async () => {
     const preset = await saveCurrentPreset();
@@ -374,8 +357,93 @@ export function createToolPanel({ api, store }) {
       status.textContent = '当前预设的密钥已清除';
     });
   });
-  actions.append(save, test, clearKey);
-  settingsPage.append(basic, urlPreview, advanced, actions, status);
+  clearKey.textContent = '清除';
+  clearKey.setAttribute('aria-label', '清除当前预设密钥');
+  clearKey.classList.add('stia-button--danger-soft', 'stia-button--compact');
+
+  const pageHeading = document.createElement('div');
+  pageHeading.className = 'stia-page-heading';
+  const pageTitle = document.createElement('div');
+  pageTitle.className = 'stia-page-title';
+  pageTitle.innerHTML = '<span aria-hidden="true">⚙</span><strong>设置</strong>';
+  const enabledField = field('扩展已启用', enabled);
+  enabledField.classList.add('stia-switch-field');
+  pageHeading.append(pageTitle, enabledField);
+
+  const apiSection = document.createElement('section');
+  apiSection.className = 'stia-section';
+  const apiTitle = document.createElement('h3');
+  apiTitle.innerHTML = '<span aria-hidden="true">▤</span> API 配置';
+  const apiGrid = document.createElement('div');
+  apiGrid.className = 'stia-form-stack';
+  const presetField = field('API 预设', presetRow);
+  const keyRow = document.createElement('div');
+  keyRow.className = 'stia-inline-control';
+  keyRow.append(apiKey, clearKey);
+  const urlField = field('Base URL', baseUrl);
+  urlField.append(urlPreview);
+  apiGrid.append(
+    presetField,
+    field('预设名称', presetName),
+    urlField,
+    field('API Key', keyRow),
+    field('模型', modelRow),
+  );
+  const apiActions = document.createElement('div');
+  apiActions.className = 'stia-actions stia-actions--fill';
+  save.textContent = '✓  保存预设';
+  test.textContent = '⌁  测试模型接口';
+  apiActions.append(save, test);
+  apiSection.append(apiTitle, apiGrid, apiActions, status);
+
+  const generationSection = document.createElement('section');
+  generationSection.className = 'stia-section';
+  const generationTitle = document.createElement('h3');
+  generationTitle.innerHTML = '<span aria-hidden="true">▧</span> 生图参数';
+  const generationGrid = document.createElement('div');
+  generationGrid.className = 'stia-form-grid stia-form-grid--compact';
+  generationGrid.append(
+    field('默认尺寸', defaultSize),
+    field('默认质量', defaultQuality),
+    field('默认数量', defaultCount),
+  );
+  const autoField = field('自动生图', autoGenerate);
+  autoField.classList.add('stia-switch-field', 'stia-switch-field--row');
+  const autoDescription = document.createElement('small');
+  autoDescription.textContent = '新消息完成后自动生成图片';
+  autoField.querySelector('span')?.append(autoDescription);
+  generationSection.append(generationTitle, generationGrid, autoField);
+
+  const warning = document.createElement('p');
+  warning.className = 'stia-warning';
+  warning.textContent = '直连模式下，每个预设的 Key 独立保存在当前酒馆账户中；中转站必须允许 CORS。HTTP 仅适合受信任的本地服务。';
+  const advanced = document.createElement('details');
+  advanced.className = 'stia-advanced';
+  const advancedSummary = document.createElement('summary');
+  advancedSummary.textContent = '高级设置';
+  const advancedGrid = document.createElement('div');
+  advancedGrid.className = 'stia-form-grid';
+  for (const [labelText, control] of [
+    ['允许 HTTP（不安全）', allowHttp],
+    ['发送 size 参数', sendSize],
+    ['发送 quality 参数', sendQuality],
+    ['发送 n 参数', sendN],
+  ]) {
+    const item = field(labelText, control);
+    item.classList.add('stia-field--check');
+    advancedGrid.append(item);
+  }
+  advancedGrid.append(
+    field('运行模式', executionMode),
+    field('模型列表路径', modelsPath),
+    field('生图路径', generationPath),
+    field('超时（秒）', timeout),
+    field('额外请求参数 JSON', extraBody),
+    warning,
+  );
+  advanced.append(advancedSummary, advancedGrid);
+
+  settingsPage.append(pageHeading, apiSection, generationSection, advanced);
 
   async function saveSettings() {
     await run(save, async () => {

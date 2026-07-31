@@ -24,6 +24,7 @@ test('URL join 不重复 /v1', () => {
     adapter.normalizeEndpoint('https://api.example.com/v1/', '/images/generations'),
     'https://api.example.com/v1/images/generations',
   );
+  assert.equal(adapter.normalizeImageSize('1024×1536'), '1024x1536');
 });
 
 test('响应解析优先 Base64，并支持包裹层', () => {

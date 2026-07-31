@@ -7,6 +7,8 @@ import {
   detectImageType,
   extractUpstreamError,
   fetchJson,
+  generateImages,
+  normalizeImageSize,
   normalizeEndpoint,
   parseImageResponse,
   parseModelsResponse,
@@ -22,6 +24,42 @@ test('免服务端适配器规范化地址且不重复 /v1', () => {
     normalizeEndpoint('https://api.example.com', '/v1/models'),
     'https://api.example.com/v1/models',
   );
+});
+
+test('尺寸参数统一使用英文小写 x', () => {
+  assert.equal(normalizeImageSize('1024×1024'), '1024x1024');
+  assert.equal(normalizeImageSize('1024 X 1536'), '1024x1536');
+  assert.equal(normalizeImageSize('1536*1024'), '1536x1024');
+  assert.equal(normalizeImageSize('auto'), 'auto');
+});
+
+test('生图请求在发送前修正 size 乘号', async t => {
+  const originalFetch = globalThis.fetch;
+  let requestBody;
+  globalThis.fetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    return new Response(JSON.stringify({ data: [{ b64_json: 'AAAA' }] }), { status: 200 });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  await generateImages({
+    preset: {
+      baseUrl: 'https://api.example.com',
+      generationPath: '/v1/images/generations',
+      selectedModel: 'image-model',
+      sendSize: true,
+      sendQuality: false,
+      sendN: false,
+      defaultSize: '1024×1024',
+      extraBody: { size: '1024 × 1536' },
+      timeoutMs: 1000,
+    },
+    apiKey: 'sk-test',
+    prompt: 'test',
+    parameters: {},
+    settings: { allowHttp: false },
+  });
+  assert.equal(requestBody.size, '1024x1536');
 });
 
 test('免服务端适配器解析图片和模型响应', () => {

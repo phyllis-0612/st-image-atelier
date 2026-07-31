@@ -116,6 +116,12 @@ function authorization(apiKey) {
   return { Authorization: `Bearer ${apiKey}` };
 }
 
+function normalizeImageSize(value) {
+  return String(value || '')
+    .trim()
+    .replace(/(\d)\s*[×✕✖＊*X]\s*(\d)/g, '$1x$2');
+}
+
 async function generate({ preset, apiKey, prompt, parameters, settings, signal }) {
   if (!preset.baseUrl) throw new AppError('PRESET_NOT_CONFIGURED');
   if (!apiKey) throw new AppError('API_KEY_MISSING');
@@ -123,12 +129,13 @@ async function generate({ preset, apiKey, prompt, parameters, settings, signal }
   const endpoint = normalizeEndpoint(preset.baseUrl, preset.generationPath);
   validateEndpoint(endpoint, settings.allowHttp);
   const body = { model: preset.selectedModel, prompt };
-  if (preset.sendSize) body.size = parameters.size || preset.defaultSize;
+  if (preset.sendSize) body.size = normalizeImageSize(parameters.size || preset.defaultSize);
   if (preset.sendQuality) body.quality = parameters.quality || preset.defaultQuality;
   if (preset.sendN) body.n = parameters.count || preset.defaultCount;
   Object.assign(body, preset.extraBody || {}, parameters.extraBody || {});
   body.model = preset.selectedModel;
   body.prompt = prompt;
+  if ('size' in body) body.size = normalizeImageSize(body.size);
 
   const payload = await fetchJson(endpoint, {
     method: 'POST',
@@ -154,6 +161,7 @@ async function listModels({ preset, apiKey, settings, signal }) {
 
 module.exports = {
   normalizeEndpoint,
+  normalizeImageSize,
   validateEndpoint,
   parseImageResponse,
   parseModelsResponse,
