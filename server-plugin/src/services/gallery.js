@@ -27,6 +27,8 @@ class GalleryService {
     response.type(result.mimeType);
     if (download) {
       response.setHeader('Content-Disposition', `attachment; filename="${result.resultId}.${result.localRelativePath.split('.').pop()}"`);
+    } else {
+      response.setHeader('Content-Disposition', `inline; filename="${result.resultId}.${result.localRelativePath.split('.').pop()}"`);
     }
     return fs.createReadStream(file).pipe(response);
   }

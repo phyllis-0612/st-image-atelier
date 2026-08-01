@@ -1,3 +1,5 @@
+import { makeImageSaveable, openImageViewer } from '../media/image-viewer.js';
+
 const ACTIVE_STATUSES = new Set(['queued', 'generating', 'downloading', 'saving']);
 
 const STATUS_TEXT = {
@@ -91,6 +93,14 @@ export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCa
       image.src = api.fileUrl(latest.resultId);
       image.alt = tag.prompt.slice(0, 120);
       image.loading = 'lazy';
+      const openOriginal = () => openImageViewer({
+        src: api.fileUrl(latest.resultId),
+        alt: image.alt,
+        filename: latest.resultId,
+        prompt: tag.prompt,
+        meta: [attempt?.model, size].filter(Boolean).join(' · '),
+      });
+      makeImageSaveable(image, openOriginal);
       media.append(image);
       if (size) {
         const badge = document.createElement('span');
@@ -113,12 +123,7 @@ export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCa
       actions.className = 'stia-actions stia-actions--fill';
       actions.append(
         button('重新生成', '', () => onGenerate(tag, 'manual'), '↻'),
-        button('下载', 'stia-button--square', () => {
-          const anchor = document.createElement('a');
-          anchor.href = api.downloadUrl(latest.resultId);
-          anchor.download = '';
-          anchor.click();
-        }, '⇩'),
+        button('查看 / 保存', 'stia-button--square', openOriginal, '⌕'),
         button('画廊', 'stia-button--square', () => onOpenGallery(tag.tagId), '▦'),
       );
       body.append(completion, actions, promptDetails(tag.prompt));

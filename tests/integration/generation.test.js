@@ -5,6 +5,8 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
+import { Writable } from 'node:stream';
+import { finished } from 'node:stream/promises';
 import { startMockUpstream } from '../mocks/mock-upstream.js';
 
 const require = createRequire(import.meta.url);
@@ -188,4 +190,25 @@ test('画廊删除移除文件并保留墓碑与 autoSuppressed', async t => {
   await assert.rejects(fs.stat(file), error => error.code === 'ENOENT');
   assert.equal(f.metadata.getResult(resultId).status, 'deleted');
   assert.equal(f.metadata.getTag(input.tagId).autoSuppressed, true);
+});
+
+test('原图查看使用 inline 响应，兼容下载端点仍使用 attachment', async t => {
+  const f = await fixture(t);
+  const input = request('base64');
+  await f.generation.generate(input);
+  const attempt = await waitForAttempt(f.metadata, input.attemptId);
+  const resultId = attempt.resultIds[0];
+
+  async function streamHeaders(download) {
+    const headers = {};
+    const response = new Writable({ write(_chunk, _encoding, done) { done(); } });
+    response.type = value => { headers['content-type'] = value; };
+    response.setHeader = (name, value) => { headers[name.toLowerCase()] = value; };
+    f.gallery.stream(resultId, response, download);
+    await finished(response);
+    return headers;
+  }
+
+  assert.match((await streamHeaders(false))['content-disposition'], /^inline;/);
+  assert.match((await streamHeaders(true))['content-disposition'], /^attachment;/);
 });

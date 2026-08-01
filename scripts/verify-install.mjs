@@ -23,6 +23,7 @@ async function verifySource(root, includeServer = false) {
     'style.css',
     'src/ui/parser/draw-parser.js',
     'src/ui/compat/st-api.js',
+    'src/ui/media/image-viewer.js',
   ];
   if (includeServer) {
     files.push(

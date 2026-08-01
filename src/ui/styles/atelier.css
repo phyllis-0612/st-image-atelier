@@ -640,6 +640,23 @@
   object-fit: contain;
 }
 
+.stia-saveable-image {
+  -webkit-touch-callout: default !important;
+  -webkit-user-select: auto !important;
+  user-select: auto !important;
+  pointer-events: auto !important;
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
+.stia-saveable-image[role="button"] {
+  cursor: zoom-in;
+}
+
+.stia-saveable-image[role="button"]:focus-visible {
+  outline: 3px solid var(--stia-accent);
+  outline-offset: -3px;
+}
+
 .stia-card__size {
   position: absolute;
   right: 8px;
@@ -684,8 +701,7 @@
   user-select: none;
 }
 
-.stia-prompt pre,
-.stia-detail pre {
+.stia-prompt pre {
   max-height: 240px;
   overflow: auto;
   overflow-wrap: anywhere;
@@ -729,6 +745,7 @@
 
 .stia-gallery-card {
   display: grid;
+  margin: 0;
   padding: 0;
   overflow: hidden;
   text-align: left;
@@ -752,10 +769,17 @@
   background: var(--stia-accent-muted);
 }
 
-.stia-gallery-card > span {
+.stia-gallery-card__caption {
   display: grid;
   gap: 3px;
+  width: 100%;
   padding: 8px 10px;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
 }
 
 .stia-gallery-card strong {
@@ -764,7 +788,7 @@
   font-weight: 500;
 }
 
-.stia-gallery-card > span > span {
+.stia-gallery-card__caption > span {
   overflow: hidden;
   color: var(--stia-secondary);
   text-overflow: ellipsis;
@@ -782,28 +806,136 @@
   text-align: center;
 }
 
-.stia-detail {
-  width: min(560px, calc(100% - 24px));
-  max-height: calc(100dvh - 24px);
-  padding: 14px;
+.stia-image-viewer-open {
+  overflow: hidden !important;
+}
+
+.stia-image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   color: var(--stia-text);
-  background: var(--stia-elevated);
+  background: color-mix(in srgb, var(--stia-panel) 96%, black 4%);
+  font: 400 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.stia-image-viewer__toolbar {
+  z-index: 2;
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  background: color-mix(in srgb, var(--stia-elevated) 94%, transparent);
+  border-bottom: 1px solid var(--stia-border);
+  backdrop-filter: blur(14px);
+}
+
+.stia-image-viewer__toolbar strong {
+  font-size: 15px;
+}
+
+.stia-image-viewer__close {
+  min-width: 88px;
+  min-height: 44px;
+  padding: 8px 14px;
+  color: var(--stia-text);
+  background: var(--stia-hover);
   border: 1px solid var(--stia-border);
-  border-radius: var(--stia-radius);
+  border-radius: 10px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
 }
 
-.stia-detail::backdrop {
-  background: rgb(0 0 0 / 65%);
-  backdrop-filter: blur(3px);
+.stia-image-viewer__stage {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  place-items: center;
+  padding: 12px;
+  background: rgb(0 0 0 / 82%);
 }
 
-.stia-detail > img {
+.stia-image-viewer__image {
   display: block;
+  width: auto;
   max-width: 100%;
-  max-height: 58vh;
-  margin: auto;
+  height: auto;
+  max-height: 100%;
   object-fit: contain;
   border-radius: 8px;
+  box-shadow: 0 14px 44px rgb(0 0 0 / 34%);
+}
+
+.stia-image-viewer__footer {
+  display: grid;
+  gap: 7px;
+  max-height: 34vh;
+  overflow: auto;
+  padding: 10px max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  background: var(--stia-elevated);
+  border-top: 1px solid var(--stia-border);
+}
+
+.stia-image-viewer__hint {
+  color: var(--stia-accent-text);
+  text-align: center;
+  font-size: 13px;
+}
+
+.stia-image-viewer__meta,
+.stia-image-viewer__status {
+  min-height: 0;
+  margin: 0;
+  color: var(--stia-muted);
+  text-align: center;
+  font-size: 11px;
+}
+
+.stia-image-viewer__prompt {
+  margin: 0;
+  color: var(--stia-muted);
+  font-size: 11px;
+}
+
+.stia-image-viewer__prompt summary {
+  min-height: 28px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.stia-image-viewer__prompt pre {
+  max-height: 120px;
+  overflow: auto;
+  margin: 4px 0 0;
+  padding: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--stia-secondary);
+  background: var(--stia-input);
+  border-radius: 8px;
+}
+
+.stia-image-viewer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.stia-image-viewer__actions > .stia-button {
+  flex: 1 1 140px;
+  max-width: 240px;
 }
 
 @media (max-width: 640px) {
