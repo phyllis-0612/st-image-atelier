@@ -1,7 +1,7 @@
 export const MODULE_NAME = 'stImageAtelier';
 export const DISPLAY_NAME = 'Image Atelier';
 export const API_ROOT = '/api/plugins/st-image-atelier';
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const ATTEMPT_STATUS = Object.freeze({
   IDLE: 'idle',
@@ -43,10 +43,47 @@ export const ERROR_CODES = Object.freeze({
 export const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
   autoGenerate: false,
+  generationProvider: 'openai',
   executionMode: 'direct',
   allowHttp: false,
   maxImageBytes: 30 * 1024 * 1024,
   downloadTimeoutMs: 60_000,
+});
+
+export const DEFAULT_NOVELAI_CONFIG = Object.freeze({
+  // Keep this empty so a fresh install does not imply that only the official
+  // NovelAI account/token flow is supported. Users may enter either an
+  // official endpoint or a NovelAI-native compatible relay.
+  baseUrl: '',
+  generationPath: '/ai/generate-image',
+  model: 'nai-diffusion-4-5-full',
+  sampler: 'k_euler',
+  noiseSchedule: 'karras',
+  defaultSize: '832x1216',
+  defaultCount: 1,
+  steps: 28,
+  scale: 5,
+  cfgRescale: 0,
+  seed: -1,
+  negativePrompt: '',
+  qualityTags: true,
+  smea: false,
+  smeaDyn: false,
+  variety: true,
+  timeoutMs: 180_000,
+  ratioMap: {
+    square: '1024x1024',
+    portrait: '832x1216',
+    landscape: '1216x832'
+  },
+  schemaVersion: 1
+});
+
+export const DEFAULT_ARTIST_PRESET = Object.freeze({
+  id: 'default',
+  name: '默认画师串',
+  prompt: '',
+  schemaVersion: 1
 });
 
 export const DEFAULT_PRESET = Object.freeze({

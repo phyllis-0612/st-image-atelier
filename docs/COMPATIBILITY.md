@@ -15,6 +15,7 @@
 | `getRequestHeaders()` | ✓ | ✓ | ✓ | ✓ | ✓ | 酒馆图片写操作携带 CSRF |
 | `extension_settings` | ✓ | ✓ | ✓ | ✓ | ✓ | 预设与画廊索引 |
 | `accountStorage` | ✓ | ✓ | ✓ | ✓ | ✓ | 账户隔离的前端 Key 存储 |
+| NovelAI ZIP 解包 | ✓ | ✓ | ✓ | ✓ | ✓ | Store ZIP 直接读取，Deflate 使用浏览器 `DecompressionStream` |
 | `/api/images/upload` | ✓ | ✓ | ✓ | ✓ | ✓ | Base64 图片落盘 |
 | `/api/images/delete` | ✓ | ✓ | ✓ | ✓ | ✓ | 受用户目录边界保护的删除 |
 | Server Plugins | 可选 | 可选 | 可选 | 可选 | 可选 | 仅增强模式需要 |
@@ -30,6 +31,8 @@
 ## 已知边界
 
 - 免服务端模式依赖中转站 CORS；这不是 SillyTavern 版本问题。
+- NovelAI 固定使用免服务端直连；官方站或第三方兼容站必须允许浏览器请求。
+- 很旧、不支持 `DecompressionStream('deflate-raw')` 的浏览器无法解开压缩过的 NAI 图片包，会显示明确的升级提示。
 - 浏览器不能读取 Server Plugin 的旧 secrets，切换模式后需重新填写 Key。
 - 免服务端画廊索引随用户扩展设置保存；如果手工删除底层图片文件，索引可能显示失效条目。
-- 当前没有可连接的用户手机实例，真实 CORS、主题和移动端验收仍需安装后执行 `TEST_PLAN.md`。
+- 已用 390px 浏览器视口完成双引擎设置页布局验收；真实 Token、CORS 与主题仍需安装后执行 `TEST_PLAN.md`。

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Image Atelier NovelAI UI Test</title>
+  <link rel="stylesheet" href="/src/ui/styles/atelier.css">
+  <style>
+    body { margin: 0; min-height: 100vh; background: #17141b; color: #eee; font-family: system-ui, sans-serif; }
+  </style>
+</head>
+<body>
+<script type="module">
+  import { createToolPanel } from '/src/ui/pages/settings/settings.js';
+  import { createStore } from '/src/ui/state/store.js';
+
+  const clone = value => structuredClone(value);
+  let settings = {
+    enabled: true,
+    autoGenerate: true,
+    generationProvider: 'novelai',
+    executionMode: 'direct',
+    allowHttp: false,
+  };
+  let openAiPreset = {
+    id: 'default',
+    name: '主站 GPT',
+    baseUrl: 'https://api.example.com',
+    modelsPath: '/v1/models',
+    generationPath: '/v1/images/generations',
+    selectedModel: 'gpt-image-2',
+    cachedModels: [{ id: 'gpt-image-2' }],
+    defaultSize: '1024x1024',
+    defaultQuality: 'high',
+    defaultCount: 1,
+    timeoutMs: 180000,
+    sendSize: true,
+    sendQuality: true,
+    sendN: true,
+    extraBody: {},
+    hasApiKey: true,
+    apiKeyMask: 'sk-••••demo',
+  };
+  let novelAi = {
+    baseUrl: 'https://nai-relay.example',
+    generationPath: '/ai/generate-image',
+    model: 'nai-diffusion-4-5-full',
+    sampler: 'k_euler',
+    noiseSchedule: 'karras',
+    defaultSize: '832x1216',
+    defaultCount: 1,
+    steps: 28,
+    scale: 5,
+    cfgRescale: 0,
+    seed: -1,
+    negativePrompt: 'lowres, bad hands',
+    qualityTags: true,
+    smea: false,
+    smeaDyn: false,
+    variety: true,
+    timeoutMs: 180000,
+    hasApiKey: true,
+    apiKeyMask: 'eyJ••••demo',
+  };
+  let artists = [
+    { id: 'default', name: '柔光厚涂', prompt: 'artist:sample, soft lighting' },
+    { id: 'cel', name: '清透赛璐璐', prompt: 'artist:sample2, cel shading' },
+  ];
+  let activeArtistPresetId = 'default';
+
+  const api = {
+    mode: () => settings.executionMode,
+    health: async () => ({ mode: settings.executionMode }),
+    getSettings: async () => clone(settings),
+    updateSettings: async patch => (settings = { ...settings, ...patch }),
+    getPresets: async () => ({ activePresetId: openAiPreset.id, items: [clone(openAiPreset)] }),
+    selectPreset: async () => clone(openAiPreset),
+    createPreset: async () => clone(openAiPreset),
+    updatePreset: async (_id, patch) => (openAiPreset = { ...openAiPreset, ...patch }),
+    deletePreset: async () => ({ activePreset: clone(openAiPreset) }),
+    clearSecret: async () => ({ cleared: true }),
+    listModels: async () => ({ models: clone(openAiPreset.cachedModels) }),
+    testPreset: async () => ({ ok: true, modelCount: 1 }),
+    getNovelAi: async () => ({
+      config: clone(novelAi),
+      artistPresets: clone(artists),
+      activeArtistPresetId,
+    }),
+    updateNovelAi: async patch => (novelAi = { ...novelAi, ...patch, apiKey: undefined }),
+    clearNovelAiSecret: async () => ({ cleared: true }),
+    selectArtistPreset: async id => {
+      activeArtistPresetId = id;
+      return clone(artists.find(item => item.id === id));
+    },
+    createArtistPreset: async ({ name }) => {
+      const preset = { id: `artist-${artists.length}`, name, prompt: '' };
+      artists.push(preset);
+      activeArtistPresetId = preset.id;
+      return clone(preset);
+    },
+    updateArtistPreset: async (id, patch) => {
+      const index = artists.findIndex(item => item.id === id);
+      artists[index] = { ...artists[index], ...patch };
+      return clone(artists[index]);
+    },
+    deleteArtistPreset: async id => {
+      artists = artists.filter(item => item.id !== id);
+      activeArtistPresetId = artists[0].id;
+      return { activeArtistPreset: clone(artists[0]) };
+    },
+    gallery: async () => ({ items: [], nextCursor: null }),
+    deleteResult: async () => ({}),
+    fileUrl: () => '',
+  };
+  const store = createStore();
+  const panel = createToolPanel({ api, store });
+  panel.show();
+  window.uiTest = { api, store, panel };
+</script>
+</body>
+</html>

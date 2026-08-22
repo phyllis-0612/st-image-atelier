@@ -2,8 +2,10 @@ export function createStore() {
   const listeners = new Set();
   const state = {
     health: null,
-    settings: { enabled: true, autoGenerate: false },
+    settings: { enabled: true, autoGenerate: false, generationProvider: 'openai' },
     preset: null,
+    novelAi: null,
+    artistPreset: null,
     tagStates: new Map(),
     serviceError: null,
   };

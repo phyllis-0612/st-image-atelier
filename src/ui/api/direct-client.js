@@ -1,4 +1,6 @@
 import {
+  DEFAULT_ARTIST_PRESET,
+  DEFAULT_NOVELAI_CONFIG,
   DEFAULT_PRESET,
   DEFAULT_SETTINGS,
   MODULE_NAME,
@@ -12,9 +14,11 @@ import {
   generateImages,
   listModelsDirect,
 } from './openai-direct.js';
+import { generateNovelAiImages } from './novelai-direct.js';
 
 const LEGACY_API_KEY_STORAGE = 'stImageAtelier.directApiKey.v1';
 const API_KEY_STORAGE_PREFIX = 'stImageAtelier.directApiKey.v2:';
+const NOVELAI_KEY_STORAGE = 'stImageAtelier.novelAiApiKey.v1';
 const ACTIVE_STATUSES = new Set(['queued', 'generating', 'downloading', 'saving']);
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'interrupted', 'cancelled']);
 
@@ -52,12 +56,32 @@ function normalizePreset(value = {}) {
   return preset;
 }
 
+function normalizeNovelAiConfig(value = {}) {
+  return {
+    ...clone(DEFAULT_NOVELAI_CONFIG),
+    ...value,
+    ratioMap: {
+      ...clone(DEFAULT_NOVELAI_CONFIG.ratioMap),
+      ...(value.ratioMap || {}),
+    },
+  };
+}
+
+function normalizeArtistPreset(value = {}) {
+  const preset = { ...clone(DEFAULT_ARTIST_PRESET), ...value };
+  preset.id = String(preset.id || uuid());
+  preset.name = String(preset.name || '未命名画师串').trim() || '未命名画师串';
+  preset.prompt = String(preset.prompt || '').trim();
+  return preset;
+}
+
 function ensureNamespace(extensionSettings) {
   const previous = extensionSettings[MODULE_NAME];
   const namespace = previous && typeof previous === 'object' ? previous : {};
   namespace.settings = {
     ...clone(DEFAULT_SETTINGS),
     ...(namespace.settings || {}),
+    generationProvider: namespace.settings?.generationProvider === 'novelai' ? 'novelai' : 'openai',
     executionMode: namespace.settings?.executionMode || 'direct',
   };
   const sourcePresets = Array.isArray(namespace.presets) && namespace.presets.length
@@ -74,6 +98,21 @@ function ensureNamespace(extensionSettings) {
     ? namespace.activePresetId
     : namespace.presets[0].id;
   delete namespace.preset;
+  namespace.novelAi = normalizeNovelAiConfig(namespace.novelAi);
+  const sourceArtistPresets = Array.isArray(namespace.artistPresets) && namespace.artistPresets.length
+    ? namespace.artistPresets
+    : [DEFAULT_ARTIST_PRESET];
+  const artistIds = new Set();
+  namespace.artistPresets = sourceArtistPresets.map(value => {
+    const preset = normalizeArtistPreset(value);
+    if (artistIds.has(preset.id)) preset.id = uuid();
+    artistIds.add(preset.id);
+    return preset;
+  });
+  namespace.activeArtistPresetId = namespace.artistPresets
+    .some(item => item.id === namespace.activeArtistPresetId)
+    ? namespace.activeArtistPresetId
+    : namespace.artistPresets[0].id;
   namespace.gallery = Array.isArray(namespace.gallery) ? namespace.gallery : [];
   namespace.deletedResultIds = Array.isArray(namespace.deletedResultIds)
     ? namespace.deletedResultIds
@@ -122,6 +161,14 @@ export function createDirectApiClient({
     return presetById() || namespace.presets[0];
   }
 
+  function artistPresetById(presetId = namespace.activeArtistPresetId) {
+    return namespace.artistPresets.find(item => item.id === presetId) || null;
+  }
+
+  function activeArtistPreset() {
+    return artistPresetById() || namespace.artistPresets[0];
+  }
+
   function keyStorageName(presetId) {
     return `${API_KEY_STORAGE_PREFIX}${presetId}`;
   }
@@ -154,6 +201,34 @@ export function createDirectApiClient({
     } catch {
       // Sandboxed or privacy-restricted browsers can still use the key in this session.
     }
+  }
+
+  function getNovelAiKey() {
+    try {
+      return keyStorage?.getItem(NOVELAI_KEY_STORAGE) || memoryKeys.get(NOVELAI_KEY_STORAGE) || '';
+    } catch {
+      return memoryKeys.get(NOVELAI_KEY_STORAGE) || '';
+    }
+  }
+
+  function setNovelAiKey(value) {
+    const token = String(value || '').trim().replace(/^Bearer\s+/i, '');
+    memoryKeys.set(NOVELAI_KEY_STORAGE, token);
+    try {
+      if (token) keyStorage?.setItem(NOVELAI_KEY_STORAGE, token);
+      else keyStorage?.removeItem(NOVELAI_KEY_STORAGE);
+    } catch {
+      // Keep the token for this page session when storage is unavailable.
+    }
+  }
+
+  function publicNovelAiConfig() {
+    const apiKey = getNovelAiKey();
+    return {
+      ...clone(namespace.novelAi),
+      hasApiKey: Boolean(apiKey),
+      apiKeyMask: maskKey(apiKey),
+    };
   }
 
   async function savePreferences() {
@@ -287,8 +362,13 @@ export function createDirectApiClient({
       chatId: input.chatId,
       messageUuid: input.messageUuid,
       prompt: input.prompt,
+      resolvedPrompt: attempt.resolvedPrompt || input.prompt,
+      provider: attempt.provider || 'openai',
       presetId: attempt.presetId,
       presetNameSnapshot: attempt.presetNameSnapshot,
+      artistPresetId: attempt.artistPresetId || null,
+      artistPresetNameSnapshot: attempt.artistPresetNameSnapshot || null,
+      generationSeed: attempt.generationSeed ?? null,
       apiModel: attempt.model,
       localRelativePath: uploaded.path,
       mimeType: type.mimeType,
@@ -355,18 +435,35 @@ export function createDirectApiClient({
     if (!found) throw new DirectError('VALIDATION_FAILED', '找不到对应的生图标签');
     const existing = found.tag.attempts?.find(item => item.attemptId === input.attemptId);
     if (existing) return clone(existing);
-    const preset = clone(presetById(input.presetId) || activePreset());
-    if (!preset) throw new DirectError('PRESET_NOT_CONFIGURED', '找不到所选 API 预设');
-    const apiKey = getApiKey(preset.id);
-    const requestedSize = preset.ratioMap?.[input.parameters?.ratio] || preset.defaultSize;
+    const provider = input.provider || namespace.settings.generationProvider || 'openai';
+    const preset = provider === 'novelai'
+      ? null
+      : clone(presetById(input.presetId) || activePreset());
+    if (provider !== 'novelai' && !preset) {
+      throw new DirectError('PRESET_NOT_CONFIGURED', '找不到所选 API 预设');
+    }
+    const novelAi = provider === 'novelai' ? clone(namespace.novelAi) : null;
+    const artistPreset = provider === 'novelai'
+      ? clone(artistPresetById(input.artistPresetId) || activeArtistPreset())
+      : null;
+    if (provider === 'novelai' && !artistPreset) {
+      throw new DirectError('PRESET_NOT_CONFIGURED', '找不到所选画师串预设');
+    }
+    const apiKey = provider === 'novelai' ? getNovelAiKey() : getApiKey(preset.id);
+    const requestedSize = provider === 'novelai'
+      ? (novelAi.ratioMap?.[input.parameters?.ratio] || novelAi.defaultSize)
+      : (preset.ratioMap?.[input.parameters?.ratio] || preset.defaultSize);
 
     const attempt = {
       attemptId: input.attemptId,
       tagId: input.tagId,
       requestMode: input.requestMode,
-      presetId: preset.id,
-      presetNameSnapshot: preset.name,
-      model: preset.selectedModel,
+      provider,
+      presetId: provider === 'novelai' ? 'novelai' : preset.id,
+      presetNameSnapshot: provider === 'novelai' ? 'NovelAI' : preset.name,
+      artistPresetId: artistPreset?.id || null,
+      artistPresetNameSnapshot: artistPreset?.name || null,
+      model: provider === 'novelai' ? novelAi.model : preset.selectedModel,
       parameters: { ...clone(input.parameters || {}), size: requestedSize },
       status: 'generating',
       resultIds: [],
@@ -388,14 +485,30 @@ export function createDirectApiClient({
 
     const saved = [];
     try {
-      const sources = await generateImages({
-        preset,
-        apiKey,
-        prompt: input.prompt,
-        parameters: attempt.parameters,
-        settings: namespace.settings,
-        signal: controller.signal,
-      });
+      let sources;
+      if (provider === 'novelai') {
+        const generated = await generateNovelAiImages({
+          config: novelAi,
+          apiKey,
+          artistPrompt: artistPreset.prompt,
+          prompt: input.prompt,
+          parameters: attempt.parameters,
+          settings: namespace.settings,
+          signal: controller.signal,
+        });
+        sources = generated.sources;
+        attempt.resolvedPrompt = generated.resolvedPrompt;
+        attempt.generationSeed = generated.seed;
+      } else {
+        sources = await generateImages({
+          preset,
+          apiKey,
+          prompt: input.prompt,
+          parameters: attempt.parameters,
+          settings: namespace.settings,
+          signal: controller.signal,
+        });
+      }
 
       attempt.status = 'downloading';
       found = await persistAttempt(found, attempt);
@@ -497,7 +610,7 @@ export function createDirectApiClient({
     mode: () => namespace.settings.executionMode || 'direct',
     health: async () => ({
       mode: 'direct',
-      version: '1.3.7',
+      version: '1.4.1',
       corsRequired: true,
       storage: 'sillytavern-images',
     }),
@@ -511,6 +624,74 @@ export function createDirectApiClient({
       activePresetId: namespace.activePresetId,
       items: namespace.presets.map(preset => publicPreset(preset, getApiKey(preset.id))),
     }),
+    getNovelAi: async () => ({
+      config: publicNovelAiConfig(),
+      activeArtistPresetId: namespace.activeArtistPresetId,
+      artistPresets: clone(namespace.artistPresets),
+    }),
+    updateNovelAi: async patch => {
+      if (typeof patch?.apiKey === 'string' && patch.apiKey) setNovelAiKey(patch.apiKey);
+      const next = { ...patch };
+      delete next.apiKey;
+      Object.assign(namespace.novelAi, normalizeNovelAiConfig({ ...namespace.novelAi, ...next }), {
+        updatedAt: now(),
+        schemaVersion: SCHEMA_VERSION,
+      });
+      await savePreferences();
+      return publicNovelAiConfig();
+    },
+    clearNovelAiSecret: async () => {
+      setNovelAiKey('');
+      return { cleared: true };
+    },
+    selectArtistPreset: async presetId => {
+      const preset = artistPresetById(presetId);
+      if (!preset) throw new DirectError('VALIDATION_FAILED', '找不到所选画师串预设');
+      namespace.activeArtistPresetId = preset.id;
+      await savePreferences();
+      return clone(preset);
+    },
+    createArtistPreset: async ({ name = '新画师串', prompt = '' } = {}) => {
+      const timestamp = now();
+      const preset = normalizeArtistPreset({
+        id: uuid(),
+        name,
+        prompt,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        schemaVersion: SCHEMA_VERSION,
+      });
+      namespace.artistPresets.push(preset);
+      namespace.activeArtistPresetId = preset.id;
+      await savePreferences();
+      return clone(preset);
+    },
+    updateArtistPreset: async (presetId, patch) => {
+      const preset = artistPresetById(presetId || namespace.activeArtistPresetId);
+      if (!preset) throw new DirectError('VALIDATION_FAILED', '找不到要保存的画师串预设');
+      Object.assign(preset, normalizeArtistPreset({ ...preset, ...patch }), {
+        id: preset.id,
+        updatedAt: now(),
+        schemaVersion: SCHEMA_VERSION,
+      });
+      await savePreferences();
+      return clone(preset);
+    },
+    deleteArtistPreset: async presetId => {
+      if (namespace.artistPresets.length <= 1) {
+        throw new DirectError('VALIDATION_FAILED', '至少需要保留一个画师串预设');
+      }
+      const index = namespace.artistPresets.findIndex(item => item.id === presetId);
+      if (index < 0) throw new DirectError('VALIDATION_FAILED', '找不到要删除的画师串预设');
+      namespace.artistPresets.splice(index, 1);
+      if (namespace.activeArtistPresetId === presetId) {
+        namespace.activeArtistPresetId = namespace.artistPresets[
+          Math.min(index, namespace.artistPresets.length - 1)
+        ].id;
+      }
+      await savePreferences();
+      return { deleted: true, activeArtistPreset: clone(activeArtistPreset()) };
+    },
     selectPreset: async presetId => {
       const preset = presetById(presetId);
       if (!preset) throw new DirectError('VALIDATION_FAILED', '找不到所选 API 预设');

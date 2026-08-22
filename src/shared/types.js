@@ -1,6 +1,7 @@
 /**
  * @typedef {'square'|'portrait'|'landscape'} DrawRatio
  * @typedef {'manual'|'auto'} RequestMode
+ * @typedef {'openai'|'novelai'} GenerationProvider
  * @typedef {'idle'|'queued'|'generating'|'downloading'|'saving'|'succeeded'|'failed'|'interrupted'|'cancelled'} AttemptStatus
  *
  * @typedef {object} DrawTag
@@ -23,8 +24,7 @@
  * @property {boolean} autoAttempted
  * @property {boolean} autoSuppressed
  *
- * Phase two reserves multi-preset selection, filters, favorites, references,
- * provider-specific options and cost fields. They are intentionally absent
- * from phase-one behavior.
+ * GPT API 预设与 NovelAI 画师串预设分别保存在 extension_settings；密钥仅保存在
+ * accountStorage。过滤、收藏、参考图与成本字段仍保留给后续版本。
  */
 export {};

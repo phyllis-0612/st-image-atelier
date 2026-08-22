@@ -2,13 +2,41 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { createDirectApiClient } from '../../src/ui/api/direct-client.js';
-import { startMockUpstream } from '../mocks/mock-upstream.js';
+import { PNG_BASE64, startMockUpstream } from '../mocks/mock-upstream.js';
 
 function response(status, payload) {
   return new Response(JSON.stringify(payload), {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+function storedZip(name, data) {
+  const nameBytes = Buffer.from(name);
+  const body = Buffer.from(data);
+  const local = Buffer.alloc(30 + nameBytes.length + body.length);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt32LE(body.length, 18);
+  local.writeUInt32LE(body.length, 22);
+  local.writeUInt16LE(nameBytes.length, 26);
+  nameBytes.copy(local, 30);
+  body.copy(local, 30 + nameBytes.length);
+  const central = Buffer.alloc(46 + nameBytes.length);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt32LE(body.length, 20);
+  central.writeUInt32LE(body.length, 24);
+  central.writeUInt16LE(nameBytes.length, 28);
+  nameBytes.copy(central, 46);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(1, 8);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(central.length, 12);
+  eocd.writeUInt32LE(local.length, 16);
+  return Buffer.concat([local, central, eocd]);
 }
 
 test('仓库链接直装模式完成生成、幂等、画廊与删除', async t => {
@@ -295,4 +323,108 @@ test('旧版单预设迁移为多预设，且每个预设独立保存密钥', as
   assert.equal(removed.activePreset.id, 'default');
   assert.equal((await client.getPresets()).items.length, 1);
   assert.doesNotMatch(JSON.stringify(extensionSettings), /sk-(?:legacy|backup)/);
+});
+
+test('NovelAI 引擎使用独立 Token、画师串预设并保存生成结果', async t => {
+  const originalFetch = globalThis.fetch;
+  const png = Buffer.from(PNG_BASE64, 'base64');
+  const zip = storedZip('image_0.png', png);
+  let novelAiRequest;
+  globalThis.fetch = async (url, options = {}) => {
+    if (url === 'https://nai.example/ai/generate-image') {
+      novelAiRequest = { options, body: JSON.parse(options.body) };
+      return new Response(zip, {
+        status: 200,
+        headers: { 'Content-Type': 'application/zip' },
+      });
+    }
+    if (url === '/api/images/upload') {
+      const body = JSON.parse(options.body);
+      return response(200, { path: `user/images/st-image-atelier/${body.filename}.${body.format}` });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  const tagId = crypto.randomUUID();
+  const messageUuid = crypto.randomUUID();
+  const message = {
+    is_user: false,
+    mes: '<draw>1girl, sunset</draw>',
+    extra: {
+      stImageAtelier: {
+        messageUuid,
+        schemaVersion: 4,
+        tags: [{
+          tagId,
+          prompt: '1girl, sunset',
+          ordinal: 0,
+          count: 1,
+          attempts: [],
+          results: [],
+          resultIds: [],
+          latestResultId: null,
+          autoAttempted: false,
+          autoSuppressed: false,
+        }],
+      },
+    },
+  };
+  const storage = new Map();
+  const extensionSettings = {};
+  const client = createDirectApiClient({
+    compat: {
+      chat: () => [message],
+      save: async () => {},
+      headers: () => ({ 'Content-Type': 'application/json' }),
+    },
+    extensionSettings,
+    saveSettingsDebounced: () => {},
+    keyStorage: {
+      getItem: key => storage.get(key) || null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: key => storage.delete(key),
+    },
+  });
+  await client.updateSettings({ generationProvider: 'novelai' });
+  await client.updateNovelAi({
+    baseUrl: 'https://nai.example',
+    apiKey: 'nai-secret-token',
+    model: 'nai-diffusion-4-5-full',
+    defaultSize: '512x768',
+    seed: 42,
+  });
+  const novelAiData = await client.getNovelAi();
+  const artist = await client.updateArtistPreset(novelAiData.activeArtistPresetId, {
+    name: '柔光画师串',
+    prompt: 'artist:sample, soft lighting',
+  });
+
+  const attempt = await client.generate({
+    tagId,
+    attemptId: crypto.randomUUID(),
+    requestMode: 'manual',
+    provider: 'novelai',
+    artistPresetId: artist.id,
+    prompt: '1girl, sunset',
+    chatId: 'chat-nai',
+    messageUuid,
+    tagOrdinal: 0,
+    parameters: { count: 1 },
+  });
+  assert.equal(attempt.status, 'succeeded');
+  assert.equal(attempt.provider, 'novelai');
+  assert.equal(attempt.artistPresetNameSnapshot, '柔光画师串');
+  assert.equal(attempt.generationSeed, 42);
+  assert.equal(novelAiRequest.options.headers.Authorization, 'Bearer nai-secret-token');
+  assert.match(novelAiRequest.body.input, /^artist:sample, soft lighting, 1girl, sunset/);
+  assert.equal(novelAiRequest.body.parameters.width, 512);
+  assert.equal(novelAiRequest.body.parameters.height, 768);
+
+  const [state] = await client.resolveTags([tagId]);
+  assert.equal(state.results.length, 1);
+  assert.equal(state.results[0].provider, 'novelai');
+  assert.equal(state.results[0].artistPresetNameSnapshot, '柔光画师串');
+  assert.equal(state.results[0].generationSeed, 42);
+  assert.doesNotMatch(JSON.stringify(extensionSettings), /nai-secret-token/);
 });

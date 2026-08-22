@@ -8,8 +8,9 @@ MESSAGE_RECEIVED (live)
   -> message.extra.stImageAtelier 写入稳定 UUID
   -> saveChatConditional
   -> 手动点击或自动串行队列
-  -> 浏览器直连 OpenAI Images 兼容端点
-  -> URL 下载 / Base64 解码
+  -> 按设置选择 GPT/OpenAI-compatible 或 NovelAI
+  -> GPT：URL 下载 / Base64 解码
+  -> NAI：组装画师串与 V4/V5 prompt 结构，解开 ZIP 图片包
   -> magic bytes + 30 MB 大小校验
   -> POST /api/images/upload
   -> 图片进入当前 ST 用户图片目录
@@ -28,11 +29,12 @@ MESSAGE_RECEIVED (live)
   - result 路径与元数据
   - 自动生成与删除抑制标记
 - `extension_settings.stImageAtelier`
-  - 普通设置和预设
+  - 当前生图引擎、普通设置和 GPT API 预设
+  - NovelAI 非敏感参数与画师串预设
   - 画廊索引
   - 删除墓碑
 - SillyTavern `accountStorage`
-  - 免服务端模式的 API Key
+  - 彼此隔离的 GPT API Key 与 NovelAI Persistent API Token
 - SillyTavern 用户图片目录
   - `st-image-atelier/<resultId>.<ext>`
 
@@ -50,7 +52,9 @@ MESSAGE_RECEIVED (live)
 
 ## CORS 与 Key 边界
 
-默认模式的上游请求发生在浏览器，因此要求中转站允许 CORS。Key 不进入聊天、画廊元数据或日志，但会存在于当前账户的前端存储和请求内存中。任何运行在同源页面上的前端代码都处于相同信任边界。
+默认模式的上游请求发生在浏览器，因此要求 GPT 中转站或 NAI 兼容站允许 CORS。Key/Token 不进入聊天、画廊元数据或日志，但会存在于当前账户的前端存储和请求内存中。任何运行在同源页面上的前端代码都处于相同信任边界。
+
+NovelAI 当前固定走直连模式；官方 `POST /ai/generate-image` 返回的 ZIP 在浏览器中解压，随后沿用与 GPT 相同的图片校验和 `/api/images/upload` 保存路径。第三方兼容站若直接返回 JSON/Base64 也会被识别。
 
 ## 可选 Server Plugin
 

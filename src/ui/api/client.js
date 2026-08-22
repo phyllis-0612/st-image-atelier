@@ -100,12 +100,16 @@ export function createApiClient({
 
   async function updateSettings(patch) {
     const requestedMode = patch.executionMode || direct.mode();
+    if (Object.hasOwn(patch, 'generationProvider')) {
+      await direct.updateSettings({ generationProvider: patch.generationProvider });
+    }
     if (requestedMode !== direct.mode()) {
       await direct.updateSettings({ executionMode: requestedMode });
     }
     if (requestedMode === 'direct') return direct.updateSettings(patch);
     const remotePatch = { ...patch };
     delete remotePatch.executionMode;
+    delete remotePatch.generationProvider;
     const remote = Object.keys(remotePatch).length
       ? await server.updateSettings(remotePatch)
       : await server.getSettings();
@@ -117,6 +121,13 @@ export function createApiClient({
     getSettings,
     updateSettings,
     getPresets: () => selected().getPresets(),
+    getNovelAi: () => direct.getNovelAi(),
+    updateNovelAi: patch => direct.updateNovelAi(patch),
+    clearNovelAiSecret: () => direct.clearNovelAiSecret(),
+    selectArtistPreset: presetId => direct.selectArtistPreset(presetId),
+    createArtistPreset: input => direct.createArtistPreset(input),
+    updateArtistPreset: (presetId, patch) => direct.updateArtistPreset(presetId, patch),
+    deleteArtistPreset: presetId => direct.deleteArtistPreset(presetId),
     selectPreset: presetId => direct.mode() === 'direct'
       ? direct.selectPreset(presetId)
       : server.getPresets().then(data => data.items.find(item => item.id === presetId)),
@@ -137,7 +148,9 @@ export function createApiClient({
     listModels: presetId => selected().listModels(presetId),
     testPreset: presetId => selected().testPreset(presetId),
     resolveTags: tagIds => selected().resolveTags(tagIds),
-    generate: input => selected().generate(input),
+    generate: input => input.provider === 'novelai'
+      ? direct.generate(input)
+      : selected().generate(input),
     attempt: attemptId => selected().attempt(attemptId),
     cancel: attemptId => selected().cancel(attemptId),
     gallery: options => selected().gallery(options),

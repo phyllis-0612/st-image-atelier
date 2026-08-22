@@ -245,6 +245,21 @@
   color: var(--stia-secondary);
 }
 
+.stia-engine-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 5px;
+  background: var(--stia-elevated);
+  border: 1px solid var(--stia-border-subtle);
+  border-radius: 10px;
+}
+
+.stia-engine-switch > .stia-button {
+  min-height: 38px;
+  border-color: transparent;
+}
+
 .stia-section {
   display: flex;
   flex-direction: column;
@@ -253,6 +268,14 @@
   background: var(--stia-elevated);
   border: 1px solid var(--stia-border-subtle);
   border-radius: var(--stia-radius);
+}
+
+.stia-section--compact {
+  padding-block: 11px;
+}
+
+.stia-section--novelai {
+  border-top-color: color-mix(in srgb, var(--stia-accent) 55%, var(--stia-border-subtle));
 }
 
 .stia-section h3 {
@@ -267,6 +290,20 @@
 
 .stia-section h3 > span {
   color: var(--stia-accent);
+}
+
+.stia-subheading {
+  margin: 4px 0 -2px;
+  color: var(--stia-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.stia-artist-preset {
+  padding: 12px;
+  background: color-mix(in srgb, var(--stia-accent) 4%, var(--stia-input));
+  border: 1px solid var(--stia-border-subtle);
+  border-radius: 9px;
 }
 
 .stia-form-stack {

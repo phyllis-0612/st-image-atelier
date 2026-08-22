@@ -64,11 +64,15 @@ async function generate(tag, mode) {
   if (activeTags.has(tag.tagId)) return;
   activeTags.add(tag.tagId);
   const attemptId = mode === 'auto' ? `auto:${tag.tagId}` : uuid();
+  const provider = store.state.settings.generationProvider || 'openai';
   const optimisticAttempt = {
     attemptId,
     tagId: tag.tagId,
     requestMode: mode,
-    model: store.state.preset?.selectedModel || '',
+    provider,
+    model: provider === 'novelai'
+      ? (store.state.novelAi?.model || '')
+      : (store.state.preset?.selectedModel || ''),
     status: 'generating',
     createdAt: new Date().toISOString(),
   };
@@ -79,7 +83,9 @@ async function generate(tag, mode) {
       tagId: tag.tagId,
       attemptId,
       requestMode: mode,
+      provider,
       presetId: store.state.preset?.id || 'default',
+      artistPresetId: store.state.artistPreset?.id || 'default',
       prompt: tag.prompt,
       chatId: tag.chatId || compat.currentChatId(),
       messageUuid: tag.messageUuid,
