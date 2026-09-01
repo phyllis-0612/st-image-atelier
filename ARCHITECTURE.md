@@ -54,7 +54,7 @@ MESSAGE_RECEIVED (live)
 
 默认模式的上游请求发生在浏览器，因此要求 GPT 中转站或 NAI 兼容站允许 CORS。Key/Token 不进入聊天、画廊元数据或日志，但会存在于当前账户的前端存储和请求内存中。任何运行在同源页面上的前端代码都处于相同信任边界。
 
-NovelAI 当前固定走直连模式；官方 `POST /ai/generate-image` 返回的 ZIP 在浏览器中解压，Aurora 的 `/api/generate-direct` NDJSON 流会提取成功事件并把相对图片地址解析为中转站绝对地址，随后沿用与 GPT 相同的图片校验和 `/api/images/upload` 保存路径。第三方兼容站若直接返回 JSON/Base64 也会被识别。画师预设同时保存正面与负面串，生成时分别合并到正、负提示词结构。
+NovelAI 当前固定走直连模式；官方 `POST /ai/generate-image` 返回的 ZIP 在浏览器中解压，Aurora 的 `/api/generate-direct` NDJSON 流会提取成功事件并把相对图片地址解析为中转站绝对地址，随后沿用与 GPT 相同的图片校验和 `/api/images/upload` 保存路径。第三方兼容站若直接返回 JSON/Base64 也会被识别。画师预设同时保存正面与负面串，生成时分别合并到正、负提示词结构。JSON 分享层只序列化名称、正面串和负面串；导入后重新生成本地 ID 与时间戳，并进行格式、长度、去重和重名校验。
 
 ## 可选 Server Plugin
 

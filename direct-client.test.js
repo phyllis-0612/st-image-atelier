@@ -430,3 +430,56 @@ test('NovelAI 引擎使用独立 Token、画师串预设并保存生成结果', 
   assert.equal(state.results[0].generationSeed, 42);
   assert.doesNotMatch(JSON.stringify(extensionSettings), /nai-secret-token/);
 });
+
+test('画师串预设可安全导出、去重导入并处理重名', async () => {
+  const extensionSettings = {};
+  const storage = new Map();
+  const client = createDirectApiClient({
+    compat: {
+      chat: () => [],
+      save: async () => {},
+      headers: () => ({ 'Content-Type': 'application/json' }),
+    },
+    extensionSettings,
+    saveSettingsDebounced: () => {},
+    keyStorage: {
+      getItem: key => storage.get(key) || null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: key => storage.delete(key),
+    },
+  });
+  await client.updateNovelAi({ apiKey: 'private-nai-token' });
+  const state = await client.getNovelAi();
+  const original = await client.updateArtistPreset(state.activeArtistPresetId, {
+    name: '共享画风',
+    prompt: 'artist:a, soft light',
+    negativePrompt: 'bad anatomy',
+  });
+
+  const exported = await client.exportArtistPresets({ presetIds: [original.id] });
+  assert.deepEqual(exported.presets, [{
+    name: '共享画风',
+    positivePrompt: 'artist:a, soft light',
+    negativePrompt: 'bad anatomy',
+  }]);
+  assert.doesNotMatch(JSON.stringify(exported), /private-nai-token|"id"/);
+
+  const result = await client.importArtistPresets({
+    format: 'st-image-atelier-artist-presets',
+    version: 1,
+    presets: [
+      { id: 'foreign-id', name: '共享画风', positivePrompt: 'artist:a, soft light', negativePrompt: 'bad anatomy' },
+      { id: 'foreign-id-2', name: '共享画风', positivePrompt: 'artist:b', negativePrompt: 'lowres' },
+      { name: '水彩', prompt: 'watercolor', negative_prompt: 'photo' },
+    ],
+  });
+  assert.equal(result.importedCount, 2);
+  assert.equal(result.skippedCount, 1);
+  assert.equal(result.activeArtistPreset.name, '共享画风（导入 2）');
+  assert.equal(result.activeArtistPreset.prompt, 'artist:b');
+  assert.equal(result.activeArtistPreset.negativePrompt, 'lowres');
+  assert.ok(result.artistPresets.some(item => item.name === '水彩'
+    && item.prompt === 'watercolor'
+    && item.negativePrompt === 'photo'));
+  assert.doesNotMatch(JSON.stringify(extensionSettings), /foreign-id|private-nai-token/);
+});

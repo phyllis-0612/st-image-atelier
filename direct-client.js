@@ -15,6 +15,10 @@ import {
   listModelsDirect,
 } from './openai-direct.js';
 import { generateNovelAiImages } from './novelai-direct.js';
+import {
+  createArtistPresetExport,
+  parseArtistPresetImport,
+} from './artist-preset-transfer.js';
 
 const LEGACY_API_KEY_STORAGE = 'stImageAtelier.directApiKey.v1';
 const API_KEY_STORAGE_PREFIX = 'stImageAtelier.directApiKey.v2:';
@@ -74,6 +78,20 @@ function normalizeArtistPreset(value = {}) {
   preset.prompt = String(preset.prompt || '').trim();
   preset.negativePrompt = String(preset.negativePrompt || '').trim();
   return preset;
+}
+
+function artistPresetSignature(value) {
+  return [value.name, value.prompt, value.negativePrompt]
+    .map(part => String(part || '').trim())
+    .join('\u0000');
+}
+
+function uniqueImportedName(name, presets) {
+  const names = new Set(presets.map(item => item.name));
+  if (!names.has(name)) return name;
+  let suffix = 2;
+  while (names.has(`${name}（导入 ${suffix}）`)) suffix += 1;
+  return `${name}（导入 ${suffix}）`;
 }
 
 function ensureNamespace(extensionSettings) {
@@ -614,7 +632,7 @@ export function createDirectApiClient({
     mode: () => namespace.settings.executionMode || 'direct',
     health: async () => ({
       mode: 'direct',
-      version: '1.4.2',
+      version: '1.4.3',
       corsRequired: true,
       storage: 'sillytavern-images',
     }),
@@ -685,6 +703,66 @@ export function createDirectApiClient({
       });
       await savePreferences();
       return clone(preset);
+    },
+    exportArtistPresets: async ({ presetIds } = {}) => {
+      const selectedIds = Array.isArray(presetIds) && presetIds.length
+        ? new Set(presetIds.map(String))
+        : null;
+      const selectedPresets = selectedIds
+        ? namespace.artistPresets.filter(preset => selectedIds.has(preset.id))
+        : namespace.artistPresets;
+      if (!selectedPresets.length) {
+        throw new DirectError('VALIDATION_FAILED', '没有找到可导出的画师串预设');
+      }
+      return createArtistPresetExport(selectedPresets);
+    },
+    importArtistPresets: async payload => {
+      let imported;
+      try {
+        imported = parseArtistPresetImport(payload);
+      } catch (error) {
+        throw new DirectError('VALIDATION_FAILED', error.message || '画师串分享文件无效');
+      }
+      const signatures = new Set(namespace.artistPresets.map(artistPresetSignature));
+      const uniqueImports = [];
+      let skippedCount = 0;
+      for (const value of imported) {
+        const signature = artistPresetSignature(value);
+        if (signatures.has(signature)) {
+          skippedCount += 1;
+          continue;
+        }
+        signatures.add(signature);
+        uniqueImports.push(value);
+      }
+      if (namespace.artistPresets.length + uniqueImports.length > 200) {
+        throw new DirectError('VALIDATION_FAILED', '画师串预设总数不能超过 200 条');
+      }
+
+      const added = [];
+      for (const value of uniqueImports) {
+        const timestamp = now();
+        const preset = normalizeArtistPreset({
+          ...value,
+          id: uuid(),
+          name: uniqueImportedName(value.name, namespace.artistPresets),
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          schemaVersion: SCHEMA_VERSION,
+        });
+        namespace.artistPresets.push(preset);
+        signatures.add(artistPresetSignature(preset));
+        added.push(preset);
+      }
+      if (added.length) namespace.activeArtistPresetId = added[0].id;
+      await savePreferences();
+      return {
+        importedCount: added.length,
+        skippedCount,
+        activeArtistPresetId: namespace.activeArtistPresetId,
+        activeArtistPreset: clone(activeArtistPreset()),
+        artistPresets: clone(namespace.artistPresets),
+      };
     },
     deleteArtistPreset: async presetId => {
       if (namespace.artistPresets.length <= 1) {

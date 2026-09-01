@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Image Atelier Message Renderer Edit Test</title>
+</head>
+<body>
+  <div id="message"><div class="mes_text"><p>&lt;draw&gt;第一行<br>第二行&lt;/draw&gt;</p></div></div>
+  <output id="result">运行中</output>
+  <script type="module">
+    import { createMessageRenderer } from '../../src/ui/renderer/message-renderer.js';
+
+    const tag = {
+      tagId: 'stable-multiline-tag',
+      prompt: '第一行\n第二行',
+      ratio: 'portrait',
+      quality: 'standard',
+      count: 1,
+    };
+    const tagState = { tag, attempts: [], results: [] };
+    const store = {
+      state: { tagStates: new Map([[tag.tagId, tagState]]) },
+      subscribe: () => () => {},
+    };
+    const renderer = createMessageRenderer({
+      compat: { messageElement: () => document.querySelector('#message') },
+      api: {},
+      store,
+      actions: {
+        generate: () => {},
+        openGallery: () => {},
+        cancel: () => {},
+      },
+    });
+
+    const initial = renderer.mount(0, [tag]);
+    const container = document.querySelector('.mes_text');
+    container.insertAdjacentHTML(
+      'afterbegin',
+      '<p>&lt;draw&gt;第一行<br>第二行&lt;/draw&gt;</p>',
+    );
+    const edited = renderer.mount(0, [tag]);
+    const result = {
+      initial,
+      edited,
+      cardCount: container.querySelectorAll('.stia-card').length,
+      drawElementCount: container.querySelectorAll('draw').length,
+      exposedMarkup: container.textContent.includes('<draw>'),
+    };
+    document.body.dataset.pass = String(
+      result.cardCount === 1 && result.drawElementCount === 0 && !result.exposedMarkup,
+    );
+    document.querySelector('#result').textContent = JSON.stringify(result);
+  </script>
+</body>
+</html>

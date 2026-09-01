@@ -1,4 +1,12 @@
 import { createCard } from './card.js';
+import { parseDrawTags } from '../parser/draw-parser.js';
+
+const BLOCK_TAGS = new Set([
+  'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DIV', 'DL', 'DT', 'DD',
+  'FIGCAPTION', 'FIGURE', 'FOOTER', 'HEADER', 'H1', 'H2', 'H3', 'H4',
+  'H5', 'H6', 'LI', 'MAIN', 'NAV', 'OL', 'P', 'PRE', 'SECTION', 'TABLE',
+  'TBODY', 'TD', 'TFOOT', 'TH', 'THEAD', 'TR', 'UL',
+]);
 
 export function findDrawMarkupSpans(text) {
   const pattern = /<draw\b[^>]*>[\s\S]*?<\/draw\s*>/gi;
@@ -52,41 +60,69 @@ export function findNormalizedTextSpan(text, needle, from = 0) {
   };
 }
 
-function visibleTextNodes(container) {
-  const nodes = [];
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      if (!node.data || node.parentElement?.closest('.stia-card, script, style')) {
-        return NodeFilter.FILTER_REJECT;
-      }
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
-  while (walker.nextNode()) nodes.push(walker.currentNode);
-  return nodes;
+export function buildVisibleTextSnapshot(container) {
+  let text = '';
+  const segments = [];
+
+  const appendSeparator = () => {
+    if (text && !/\s$/.test(text)) text += '\n';
+  };
+
+  const visit = node => {
+    if (!node) return;
+    if (node.nodeType === 3) {
+      const value = String(node.data || '');
+      if (!value) return;
+      const start = text.length;
+      text += value;
+      segments.push({ node, start, end: text.length });
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    const tagName = String(node.tagName || '').toUpperCase();
+    if (node !== container
+      && (tagName === 'SCRIPT' || tagName === 'STYLE' || node.classList?.contains('stia-card'))) {
+      return;
+    }
+    if (tagName === 'BR') {
+      appendSeparator();
+      return;
+    }
+    const isBlock = node !== container && BLOCK_TAGS.has(tagName);
+    if (isBlock) appendSeparator();
+    for (const child of node.childNodes || []) visit(child);
+    if (isBlock) appendSeparator();
+  };
+
+  visit(container);
+  return { text, segments };
 }
 
-function boundaryAt(nodes, absoluteOffset, side = 'start') {
-  let traversed = 0;
-  for (let index = 0; index < nodes.length; index += 1) {
-    const node = nodes[index];
-    const next = traversed + node.data.length;
-    const isSharedBoundary = absoluteOffset === next && index < nodes.length - 1;
-    if (absoluteOffset < next || (absoluteOffset === next && (side === 'end' || !isSharedBoundary))) {
-      return { node, offset: Math.max(0, absoluteOffset - traversed) };
+function boundaryAt(snapshot, absoluteOffset, side = 'start') {
+  const { segments } = snapshot;
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (absoluteOffset < segment.start || absoluteOffset > segment.end) continue;
+    const next = segments[index + 1];
+    const isSharedBoundary = absoluteOffset === segment.end && next?.start === absoluteOffset;
+    if (absoluteOffset < segment.end
+      || side === 'end'
+      || !isSharedBoundary) {
+      return {
+        node: segment.node,
+        offset: Math.max(0, Math.min(segment.node.data.length, absoluteOffset - segment.start)),
+      };
     }
-    traversed = next;
   }
-  const last = nodes.at(-1);
-  return last ? { node: last, offset: last.data.length } : null;
+  const last = segments.at(-1);
+  return last ? { node: last.node, offset: last.node.data.length } : null;
 }
 
 function textRanges(container) {
-  const nodes = visibleTextNodes(container);
-  const combined = nodes.map(node => node.data).join('');
-  return findDrawMarkupSpans(combined).map(span => {
-    const start = boundaryAt(nodes, span.start, 'start');
-    const end = boundaryAt(nodes, span.end, 'end');
+  const snapshot = buildVisibleTextSnapshot(container);
+  return findDrawMarkupSpans(snapshot.text).map(span => {
+    const start = boundaryAt(snapshot, span.start, 'start');
+    const end = boundaryAt(snapshot, span.end, 'end');
     if (!start || !end) return null;
     const range = document.createRange();
     range.setStart(start.node, start.offset);
@@ -96,9 +132,8 @@ function textRanges(container) {
 }
 
 function promptRanges(container, tags) {
-  const nodes = visibleTextNodes(container);
-  const combined = nodes.map(node => node.data).join('');
-  const normalized = normalizeWithOffsets(combined);
+  const snapshot = buildVisibleTextSnapshot(container);
+  const normalized = normalizeWithOffsets(snapshot.text);
   let cursor = 0;
   return tags.map(tag => {
     const target = normalizeWithOffsets(tag.prompt).normalized;
@@ -110,8 +145,8 @@ function promptRanges(container, tags) {
     cursor = normalizedEnd;
     const startOffset = normalized.starts[normalizedStart];
     const endOffset = normalized.ends[normalizedEnd - 1];
-    const start = boundaryAt(nodes, startOffset, 'start');
-    const end = boundaryAt(nodes, endOffset, 'end');
+    const start = boundaryAt(snapshot, startOffset, 'start');
+    const end = boundaryAt(snapshot, endOffset, 'end');
     if (!start || !end) return null;
     const range = document.createRange();
     range.setStart(start.node, start.offset);
@@ -131,12 +166,73 @@ function replaceRange(range, replacement, raw) {
   const paragraph = common?.closest?.('p');
   if (paragraph
     && !paragraph.closest('.stia-card')
-    && comparableText(paragraph.textContent) === comparableText(raw || range.toString())) {
+    && comparableText(buildVisibleTextSnapshot(paragraph).text)
+      === comparableText(raw || range.toString())) {
     paragraph.replaceWith(replacement);
     return;
   }
   range.deleteContents();
   range.insertNode(replacement);
+}
+
+function removeRange(range, raw) {
+  const common = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
+    ? range.commonAncestorContainer
+    : range.commonAncestorContainer.parentElement;
+  const paragraph = common?.closest?.('p');
+  if (paragraph
+    && !paragraph.closest('.stia-card')
+    && comparableText(buildVisibleTextSnapshot(paragraph).text)
+      === comparableText(raw || range.toString())) {
+    paragraph.remove();
+    return;
+  }
+  range.deleteContents();
+}
+
+function matchingTag(tags, prompt, used) {
+  const comparablePrompt = comparableText(prompt);
+  return tags.find(tag => !used.has(tag.tagId)
+    && comparableText(tag.prompt) === comparablePrompt);
+}
+
+function cleanupExistingSources(container, tags) {
+  const existing = tags.filter(tag =>
+    container.querySelector(`.stia-card[data-tag-id="${CSS.escape(tag.tagId)}"]`));
+  if (!existing.length) return;
+  const used = new Set();
+
+  for (const element of [...container.querySelectorAll('draw')]
+    .filter(value => !value.closest('.stia-card'))) {
+    const elementText = buildVisibleTextSnapshot(element).text;
+    const tag = matchingTag(existing, elementText, used);
+    if (!tag) continue;
+    used.add(tag.tagId);
+    const paragraph = element.closest('p');
+    if (paragraph
+      && comparableText(buildVisibleTextSnapshot(paragraph).text) === comparableText(elementText)) {
+      paragraph.remove();
+    } else {
+      element.remove();
+    }
+  }
+
+  const markupMatches = textRanges(container).map(item => {
+    const parsed = parseDrawTags(item.raw, { warn: () => {} });
+    const tag = matchingTag(existing, parsed[0]?.prompt || '', used);
+    if (tag) used.add(tag.tagId);
+    return { ...item, tag };
+  }).filter(item => item.tag);
+  for (const { range, raw } of markupMatches.reverse()) removeRange(range, raw);
+
+  const remaining = existing.filter(tag => !used.has(tag.tagId));
+  const promptMatches = promptRanges(container, remaining);
+  const promptRemovals = remaining.map((tag, index) => ({
+    tag,
+    range: promptMatches[index]?.range,
+    raw: promptMatches[index]?.raw,
+  })).filter(item => item.range);
+  for (const { range, raw } of promptRemovals.reverse()) removeRange(range, raw);
 }
 
 export function createMessageRenderer(dependencies) {
@@ -165,6 +261,18 @@ export function createMessageRenderer(dependencies) {
     const message = compat.messageElement(messageId);
     const container = message?.querySelector('.mes_text');
     if (!container) return { mounted: 0, fallback: 0 };
+
+    const activeTagIds = new Set(tags.map(tag => tag.tagId));
+    for (const card of [...container.querySelectorAll('.stia-card[data-tag-id]')]) {
+      const tagId = card.getAttribute('data-tag-id');
+      if (!tagId || activeTagIds.has(tagId)) continue;
+      card.remove();
+      cards.delete(tagId);
+    }
+    for (const list of [...container.querySelectorAll(':scope > .stia-card-list')]) {
+      if (!list.querySelector('.stia-card')) list.remove();
+    }
+    cleanupExistingSources(container, tags);
 
     const missing = tags
       .map((tag, index) => ({ tag, index }))

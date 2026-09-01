@@ -103,6 +103,35 @@
       artists[index] = { ...artists[index], ...patch };
       return clone(artists[index]);
     },
+    exportArtistPresets: async ({ presetIds } = {}) => ({
+      format: 'st-image-atelier-artist-presets',
+      version: 1,
+      presets: artists
+        .filter(item => !presetIds?.length || presetIds.includes(item.id))
+        .filter(item => item.prompt || item.negativePrompt)
+        .map(item => ({
+          name: item.name,
+          positivePrompt: item.prompt,
+          negativePrompt: item.negativePrompt,
+        })),
+    }),
+    importArtistPresets: async payload => {
+      const imported = (payload.presets || []).map((item, index) => ({
+        id: `imported-${artists.length + index}`,
+        name: item.name,
+        prompt: item.positivePrompt || item.prompt || '',
+        negativePrompt: item.negativePrompt || '',
+      }));
+      artists.push(...imported);
+      if (imported.length) activeArtistPresetId = imported[0].id;
+      return {
+        importedCount: imported.length,
+        skippedCount: 0,
+        activeArtistPresetId,
+        activeArtistPreset: clone(artists.find(item => item.id === activeArtistPresetId)),
+        artistPresets: clone(artists),
+      };
+    },
     deleteArtistPreset: async id => {
       artists = artists.filter(item => item.id !== id);
       activeArtistPresetId = artists[0].id;

@@ -3,9 +3,23 @@ import assert from 'node:assert/strict';
 import { parseDrawTags, shouldProcessMessage } from '../../src/ui/parser/draw-parser.js';
 import { hasChangedDrawSource } from '../../src/ui/events/message-events.js';
 import {
+  buildVisibleTextSnapshot,
   findDrawMarkupSpans,
   findNormalizedTextSpan,
 } from '../../src/ui/renderer/message-renderer.js';
+
+function textNode(data) {
+  return { nodeType: 3, data };
+}
+
+function element(tagName, ...childNodes) {
+  return {
+    nodeType: 1,
+    tagName: tagName.toUpperCase(),
+    childNodes,
+    classList: { contains: () => false },
+  };
+}
 
 test('解析单标签、多行与前后正文', () => {
   const tags = parseDrawTags('正文\n<draw>\n一只猫\n在窗边\n</draw>\n结尾');
@@ -48,6 +62,27 @@ test('渲染文字中的 draw 标签可按原始位置定位', () => {
   assert.equal(spans.length, 2);
   assert.equal(text.slice(spans[0].start, spans[0].end), '<draw ratio="portrait">一只猫</draw>');
   assert.equal(text.slice(spans[1].start, spans[1].end), '<draw>一只狗</draw>');
+});
+
+test('渲染后的 br 与块元素会还原为换行，不会让多行 draw 标签失配', () => {
+  const brRoot = element(
+    'div',
+    textNode('<draw>第一行'),
+    element('br'),
+    textNode('第二行</draw>'),
+  );
+  const brSnapshot = buildVisibleTextSnapshot(brRoot);
+  assert.equal(brSnapshot.text, '<draw>第一行\n第二行</draw>');
+  assert.equal(findDrawMarkupSpans(brSnapshot.text).length, 1);
+
+  const blockRoot = element(
+    'div',
+    element('p', textNode('<draw>第一段')),
+    element('p', textNode('第二段</draw>')),
+  );
+  const blockSnapshot = buildVisibleTextSnapshot(blockRoot);
+  assert.equal(blockSnapshot.text, '<draw>第一段\n第二段</draw>\n');
+  assert.equal(findDrawMarkupSpans(blockSnapshot.text)[0].raw, '<draw>第一段\n第二段</draw>');
 });
 
 test('标签被酒馆过滤后仍可按提示词原文定位', () => {

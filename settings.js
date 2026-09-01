@@ -67,6 +67,29 @@ function action(label, handler, primary = false) {
   return element;
 }
 
+function safeFilename(value) {
+  return String(value || 'artist-presets')
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '-')
+    .replace(/[. ]+$/g, '')
+    .slice(0, 60) || 'artist-presets';
+}
+
+function downloadJson(filename, value) {
+  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], {
+    type: 'application/json;charset=utf-8',
+  });
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = filename;
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 0);
+}
+
 export function createToolPanel({ api, store }) {
   const overlay = document.createElement('div');
   overlay.className = 'stia-overlay';
@@ -204,6 +227,9 @@ export function createToolPanel({ api, store }) {
   const artistNegativePrompt = document.createElement('textarea');
   artistNegativePrompt.rows = 4;
   artistNegativePrompt.placeholder = '输入这套画师串配套的负面标签；可留空';
+  const artistImportInput = input('file');
+  artistImportInput.accept = '.json,application/json';
+  artistImportInput.hidden = true;
   const status = document.createElement('p');
   status.className = 'stia-status';
   status.setAttribute('role', 'status');
@@ -578,6 +604,65 @@ export function createToolPanel({ api, store }) {
   artistPresetRow.className = 'stia-inline-control';
   artistPresetRow.append(artistSelector, createArtistPreset, deleteArtistPreset);
 
+  const exportCurrentArtistPreset = action('导出当前', async () => {
+    await run(exportCurrentArtistPreset, async () => {
+      const preset = await saveCurrentArtistPreset();
+      const payload = await api.exportArtistPresets({ presetIds: [preset.id] });
+      downloadJson(`image-atelier-${safeFilename(preset.name)}.json`, payload);
+      store.set({ artistPreset: preset });
+      status.textContent = `已导出画师串“${preset.name}”`;
+    });
+  });
+
+  const exportAllArtistPresets = action('导出全部', async () => {
+    await run(exportAllArtistPresets, async () => {
+      const preset = await saveCurrentArtistPreset();
+      const payload = await api.exportArtistPresets();
+      const date = new Date().toISOString().slice(0, 10);
+      downloadJson(`image-atelier-artist-presets-${date}.json`, payload);
+      store.set({ artistPreset: preset });
+      status.textContent = `已导出 ${payload.presets.length} 条非空画师串预设`;
+    });
+  });
+
+  const importArtistPresets = action('导入 JSON', () => {
+    artistImportInput.value = '';
+    artistImportInput.click();
+  });
+
+  artistImportInput.addEventListener('change', async () => {
+    const file = artistImportInput.files?.[0];
+    if (!file) return;
+    await run(importArtistPresets, async () => {
+      if (file.size > 2 * 1024 * 1024) throw new Error('分享文件不能超过 2 MB');
+      await saveCurrentArtistPreset();
+      let payload;
+      try {
+        payload = JSON.parse(await file.text());
+      } catch {
+        throw new Error('无法读取这个 JSON 文件，请确认文件内容完整');
+      }
+      const result = await api.importArtistPresets(payload);
+      artistPresets = result.artistPresets;
+      activeArtistPresetId = result.activeArtistPresetId;
+      updateArtistSelector(activeArtistPresetId);
+      loadArtistFields(result.activeArtistPreset);
+      store.set({ artistPreset: result.activeArtistPreset });
+      status.textContent = result.skippedCount
+        ? `已导入 ${result.importedCount} 条，跳过 ${result.skippedCount} 条完全重复的画师串`
+        : `已导入 ${result.importedCount} 条画师串预设`;
+    });
+  });
+
+  const artistTransferActions = document.createElement('div');
+  artistTransferActions.className = 'stia-actions stia-actions--fill';
+  artistTransferActions.append(
+    exportCurrentArtistPreset,
+    exportAllArtistPresets,
+    importArtistPresets,
+    artistImportInput,
+  );
+
   artistSelector.addEventListener('change', async () => {
     const nextId = artistSelector.value;
     const previousId = activeArtistPresetId;
@@ -719,6 +804,7 @@ export function createToolPanel({ api, store }) {
     field('预设名称', artistName),
     field('正面画师串 / 风格串', artistPrompt),
     field('负面画师串 / 排除串', artistNegativePrompt),
+    artistTransferActions,
   );
   const artistHint = document.createElement('small');
   artistHint.className = 'stia-muted';
