@@ -1,0 +1,1038 @@
+:root {
+  --stia-bg: var(--SmartThemeBlurTintColor, #1a1b1e);
+  --stia-card: var(--SmartThemeBotMesBlurTintColor, #232529);
+  --stia-elevated: color-mix(in srgb, var(--stia-card) 92%, white 8%);
+  --stia-hover: color-mix(in srgb, var(--stia-card) 84%, white 16%);
+  --stia-input: color-mix(in srgb, var(--stia-card) 88%, black 12%);
+  --stia-border: var(--SmartThemeBorderColor, #3a3d44);
+  --stia-border-subtle: color-mix(in srgb, var(--stia-border) 65%, transparent);
+  --stia-text: var(--SmartThemeBodyColor, #e4e5e8);
+  --stia-secondary: var(--SmartThemeEmColor, #9ea1a9);
+  --stia-muted: color-mix(in srgb, var(--stia-secondary) 68%, transparent);
+  --stia-accent: var(--SmartThemeQuoteColor, #7c8aef);
+  --stia-accent-text: color-mix(in srgb, var(--stia-accent) 70%, white 30%);
+  --stia-accent-muted: color-mix(in srgb, var(--stia-accent) 14%, transparent);
+  --stia-success: #5cb85c;
+  --stia-success-muted: rgb(92 184 92 / 12%);
+  --stia-danger: #e26666;
+  --stia-danger-muted: rgb(217 83 79 / 12%);
+  --stia-warning: #e8a838;
+  --stia-warning-muted: rgb(232 168 56 / 12%);
+  --stia-gap: 8px;
+  --stia-radius: 10px;
+}
+
+@keyframes stia-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .42; }
+}
+
+@keyframes stia-shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
+}
+
+@keyframes stia-spin {
+  to { transform: rotate(360deg); }
+}
+
+.stia-disabled .stia-card {
+  display: none;
+}
+
+.stia-modal-open {
+  overflow: hidden;
+}
+
+.stia-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 58%);
+  backdrop-filter: blur(3px);
+}
+
+.stia-overlay[hidden],
+[hidden] {
+  display: none !important;
+}
+
+.stia-panel {
+  width: min(600px, 100%);
+  max-height: min(860px, calc(100dvh - 32px));
+  overflow: auto;
+  color: var(--stia-text);
+  background: var(--stia-bg);
+  border: 1px solid var(--stia-border);
+  border-radius: 14px;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 42%);
+  font: 400 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.stia-panel > header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 0 16px;
+  background: color-mix(in srgb, var(--stia-bg) 94%, transparent);
+  border-bottom: 1px solid var(--stia-border-subtle);
+  backdrop-filter: blur(16px);
+}
+
+.stia-panel h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -.3px;
+}
+
+.stia-health {
+  color: var(--stia-muted);
+  font-size: 11px;
+}
+
+.stia-health.is-ready {
+  color: var(--stia-success);
+}
+
+.stia-tabs {
+  position: sticky;
+  top: 58px;
+  z-index: 2;
+  display: flex;
+  gap: 4px;
+  margin: 12px 16px 0;
+  padding: 3px;
+  background: var(--stia-card);
+  border: 1px solid var(--stia-border-subtle);
+  border-radius: 10px;
+}
+
+.stia-tabs .stia-button {
+  flex: 1;
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+}
+
+.stia-tabs .stia-button--primary {
+  color: white;
+  background: var(--stia-accent);
+}
+
+.stia-icon-button,
+.stia-button {
+  box-sizing: border-box;
+  min-height: 40px;
+  min-width: 40px;
+  padding: 8px 12px;
+  color: var(--stia-text);
+  background: var(--stia-hover);
+  border: 1px solid var(--stia-border);
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: none;
+  transition: background .15s ease, border-color .15s ease, transform .15s ease;
+}
+
+.stia-button:hover {
+  background: color-mix(in srgb, var(--stia-hover) 76%, var(--stia-accent) 24%);
+}
+
+.stia-button:active {
+  transform: translateY(1px);
+}
+
+.stia-button:focus-visible,
+.stia-icon-button:focus-visible,
+.stia-gallery-card:focus-visible,
+.stia-field input:focus-visible,
+.stia-field select:focus-visible,
+.stia-field textarea:focus-visible {
+  outline: 2px solid var(--stia-accent);
+  outline-offset: 2px;
+}
+
+.stia-button:disabled {
+  cursor: wait;
+  opacity: .52;
+}
+
+.stia-icon-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--stia-secondary);
+  font-size: 24px;
+}
+
+.stia-button--primary {
+  color: white;
+  background: var(--stia-accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.stia-button--danger {
+  color: var(--stia-danger);
+}
+
+.stia-button--danger-soft {
+  color: var(--stia-danger);
+  background: var(--stia-danger-muted);
+  border-color: color-mix(in srgb, var(--stia-danger) 24%, transparent);
+}
+
+.stia-button--ghost {
+  color: var(--stia-muted);
+  background: transparent;
+}
+
+.stia-button--compact {
+  min-height: 38px;
+  padding-inline: 10px;
+  white-space: nowrap;
+}
+
+.stia-button--square {
+  flex: 0 0 42px !important;
+  padding-inline: 0;
+}
+
+.stia-button--full {
+  width: 100%;
+}
+
+.stia-button__icon {
+  line-height: 1;
+}
+
+.stia-settings-page,
+.stia-gallery-page {
+  padding: 16px;
+}
+
+.stia-settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.stia-page-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stia-page-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+}
+
+.stia-page-title > span {
+  color: var(--stia-secondary);
+}
+
+.stia-engine-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 5px;
+  background: var(--stia-elevated);
+  border: 1px solid var(--stia-border-subtle);
+  border-radius: 10px;
+}
+
+.stia-engine-switch > .stia-button {
+  min-height: 38px;
+  border-color: transparent;
+}
+
+.stia-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--stia-elevated);
+  border: 1px solid var(--stia-border-subtle);
+  border-radius: var(--stia-radius);
+}
+
+.stia-section--compact {
+  padding-block: 11px;
+}
+
+.stia-section--novelai {
+  border-top-color: color-mix(in srgb, var(--stia-accent) 55%, var(--stia-border-subtle));
+}
+
+.stia-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: var(--stia-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.stia-section h3 > span {
+  color: var(--stia-accent);
+}
+
+.stia-subheading {
+  margin: 4px 0 -2px;
+  color: var(--stia-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.stia-artist-preset {
+  padding: 12px;
+  background: color-mix(in srgb, var(--stia-accent) 4%, var(--stia-input));
+  border: 1px solid var(--stia-border-subtle);
+  border-radius: 9px;
+}
+
+.stia-form-stack {
+  display: grid;
+  gap: 11px;
+}
+
+.stia-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px;
+}
+
+.stia-form-grid--compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.stia-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.stia-field--wide {
+  grid-column: 1 / -1;
+}
+
+.stia-field > span {
+  color: var(--stia-secondary);
+  font-size: 12px;
+}
+
+.stia-field input:not([type="checkbox"]),
+.stia-field select,
+.stia-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 11px;
+  color: var(--stia-text);
+  background: var(--stia-input);
+  border: 1px solid var(--stia-border);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.stia-field textarea {
+  min-height: 64px;
+  resize: vertical;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.stia-inline-control {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+
+.stia-field .stia-inline-control > select,
+.stia-field .stia-inline-control > input {
+  flex: 1 1 180px;
+  width: auto;
+  min-width: 0;
+}
+
+.stia-inline-control > .stia-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.stia-field--check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  color: var(--stia-secondary);
+}
+
+.stia-field--check > span {
+  flex: 1;
+}
+
+.stia-field--check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--stia-accent);
+}
+
+.stia-switch-field {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.stia-switch-field > span {
+  color: var(--stia-secondary);
+  font-size: 12px;
+}
+
+.stia-switch-field input {
+  appearance: none;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  margin: 0;
+  background: var(--stia-input);
+  border: 1px solid var(--stia-border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .2s ease;
+}
+
+.stia-switch-field input::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: white;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 24%);
+  transition: transform .2s ease;
+}
+
+.stia-switch-field input:checked {
+  background: var(--stia-accent);
+  border-color: var(--stia-accent);
+}
+
+.stia-switch-field input:checked::after {
+  transform: translateX(16px);
+}
+
+.stia-switch-field--row {
+  justify-content: space-between;
+  padding-top: 5px;
+}
+
+.stia-switch-field--row > span {
+  display: grid;
+  color: var(--stia-text);
+  font-size: 13px;
+}
+
+.stia-switch-field--row small {
+  margin-top: 2px;
+  color: var(--stia-muted);
+  font-size: 11px;
+}
+
+.stia-url-preview {
+  overflow-wrap: anywhere;
+  margin-top: 0;
+  padding: 0;
+  color: var(--stia-muted);
+  background: transparent;
+  font: 11px/1.4 inherit;
+}
+
+.stia-url-preview::before {
+  content: "请求地址预览：";
+}
+
+.stia-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--stia-gap);
+}
+
+.stia-actions--fill > .stia-button,
+.stia-actions--fill > a {
+  flex: 1;
+}
+
+.stia-status {
+  min-height: 0;
+  margin: 0;
+  padding: 8px 11px;
+  color: var(--stia-success);
+  background: var(--stia-success-muted);
+  border: 1px solid rgb(92 184 92 / 20%);
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.stia-status:empty {
+  display: none;
+}
+
+.stia-status::before {
+  content: "✓ ";
+}
+
+.stia-status.stia-error {
+  color: var(--stia-danger);
+  background: var(--stia-danger-muted);
+  border-color: rgb(217 83 79 / 22%);
+}
+
+.stia-status.stia-error::before {
+  content: "× ";
+}
+
+.stia-warning,
+.stia-error {
+  color: var(--stia-danger);
+}
+
+.stia-warning {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  font-size: 11px;
+}
+
+.stia-advanced {
+  background: var(--stia-elevated);
+  border: 1px solid var(--stia-border-subtle);
+  border-radius: var(--stia-radius);
+}
+
+.stia-advanced > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: 0 16px;
+  color: var(--stia-secondary);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.stia-advanced > summary::after {
+  content: "⌄";
+  color: var(--stia-muted);
+  transition: transform .2s ease;
+}
+
+.stia-advanced[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.stia-advanced > .stia-form-grid {
+  padding: 4px 16px 16px;
+}
+
+.stia-card-list {
+  display: grid;
+  gap: 10px;
+  margin-block: 10px;
+}
+
+.stia-card {
+  overflow: hidden;
+  margin-block: 8px;
+  color: var(--stia-text);
+  background: var(--stia-card);
+  border: 1px solid var(--stia-border);
+  border-radius: var(--stia-radius);
+  font: 400 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.stia-card--generating {
+  border-color: color-mix(in srgb, var(--stia-accent) 36%, transparent);
+}
+
+.stia-card--queued {
+  border-color: color-mix(in srgb, var(--stia-warning) 36%, transparent);
+}
+
+.stia-card--failed {
+  border-color: color-mix(in srgb, var(--stia-danger) 36%, transparent);
+}
+
+.stia-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+
+.stia-card__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stia-card__status-icon {
+  display: grid;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  color: var(--stia-accent);
+  background: var(--stia-accent-muted);
+  border-radius: 6px;
+  font-size: 15px;
+}
+
+.stia-card__status > span:last-child {
+  display: grid;
+}
+
+.stia-card__status strong {
+  color: var(--stia-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.stia-card__status small {
+  margin-top: 1px;
+  color: var(--stia-muted);
+  font-size: 11px;
+}
+
+.stia-card__status.is-accent strong {
+  color: var(--stia-accent-text);
+}
+
+.stia-card__status.is-warning .stia-card__status-icon {
+  color: var(--stia-warning);
+  background: var(--stia-warning-muted);
+}
+
+.stia-card__status.is-warning strong {
+  color: var(--stia-warning);
+}
+
+.stia-card__status.is-danger .stia-card__status-icon {
+  color: var(--stia-danger);
+  background: var(--stia-danger-muted);
+}
+
+.stia-card__status.is-danger strong {
+  color: var(--stia-danger);
+}
+
+.stia-card__shimmer {
+  height: 120px;
+  overflow: hidden;
+  background: linear-gradient(90deg, var(--stia-input) 25%, var(--stia-hover) 50%, var(--stia-input) 75%);
+  background-size: 200% 100%;
+  border-radius: 8px;
+  animation: stia-shimmer 1.5s ease-in-out infinite;
+}
+
+.stia-card--generating .stia-card__status-icon {
+  animation: stia-spin .9s linear infinite;
+}
+
+.stia-card--generating .stia-card__status strong {
+  animation: stia-pulse 1.5s ease-in-out infinite;
+}
+
+.stia-card__media {
+  position: relative;
+  min-height: 120px;
+  background: var(--stia-accent-muted);
+}
+
+.stia-card__image {
+  display: block;
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+}
+
+.stia-saveable-image {
+  -webkit-touch-callout: default !important;
+  -webkit-user-select: auto !important;
+  user-select: auto !important;
+  pointer-events: auto !important;
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
+.stia-saveable-image[role="button"] {
+  cursor: zoom-in;
+}
+
+.stia-saveable-image[role="button"]:focus-visible {
+  outline: 3px solid var(--stia-accent);
+  outline-offset: -3px;
+}
+
+.stia-card__size {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 3px 8px;
+  color: white;
+  background: rgb(0 0 0 / 52%);
+  border-radius: 6px;
+  font-size: 11px;
+  backdrop-filter: blur(8px);
+}
+
+.stia-card__completion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.stia-success {
+  color: var(--stia-success);
+}
+
+.stia-muted {
+  color: var(--stia-muted);
+  font-size: 11px;
+}
+
+.stia-prompt {
+  margin: 0;
+}
+
+.stia-prompt summary {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  color: var(--stia-muted);
+  cursor: pointer;
+  font-size: 11px;
+  list-style: none;
+  user-select: none;
+}
+
+.stia-prompt pre {
+  max-height: 240px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  color: var(--stia-secondary);
+  background: var(--stia-input);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  font: 12px/1.5 inherit;
+}
+
+.stia-gallery-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.stia-gallery-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stia-gallery-heading strong {
+  color: var(--stia-text);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.stia-gallery-heading span {
+  color: var(--stia-muted);
+  font-size: 12px;
+}
+
+.stia-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.stia-gallery-card {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  text-align: left;
+  color: var(--stia-text);
+  background: var(--stia-card);
+  border: 1px solid var(--stia-border);
+  border-radius: var(--stia-radius);
+  cursor: pointer;
+  transition: border-color .15s ease, transform .15s ease;
+}
+
+.stia-gallery-card:hover {
+  border-color: var(--stia-accent);
+  transform: translateY(-1px);
+}
+
+.stia-gallery-card img {
+  width: 100%;
+  aspect-ratio: 1.35;
+  object-fit: cover;
+  background: var(--stia-accent-muted);
+}
+
+.stia-gallery-card__caption {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.stia-gallery-card strong {
+  color: var(--stia-secondary);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.stia-gallery-card__caption > span {
+  overflow: hidden;
+  color: var(--stia-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.stia-gallery-card time {
+  color: var(--stia-muted);
+  font-size: 10px;
+}
+
+.stia-empty {
+  color: var(--stia-muted);
+  text-align: center;
+}
+
+.stia-image-viewer-open {
+  overflow: hidden !important;
+}
+
+.stia-image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  color: var(--stia-text);
+  background: color-mix(in srgb, var(--stia-panel) 96%, black 4%);
+  font: 400 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.stia-image-viewer__toolbar {
+  z-index: 2;
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  background: color-mix(in srgb, var(--stia-elevated) 94%, transparent);
+  border-bottom: 1px solid var(--stia-border);
+  backdrop-filter: blur(14px);
+}
+
+.stia-image-viewer__toolbar strong {
+  font-size: 15px;
+}
+
+.stia-image-viewer__close {
+  min-width: 88px;
+  min-height: 44px;
+  padding: 8px 14px;
+  color: var(--stia-text);
+  background: var(--stia-hover);
+  border: 1px solid var(--stia-border);
+  border-radius: 10px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+}
+
+.stia-image-viewer__stage {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  place-items: center;
+  padding: 12px;
+  background: rgb(0 0 0 / 82%);
+}
+
+.stia-image-viewer__image {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 14px 44px rgb(0 0 0 / 34%);
+}
+
+.stia-image-viewer__footer {
+  display: grid;
+  gap: 7px;
+  max-height: 34vh;
+  overflow: auto;
+  padding: 10px max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  background: var(--stia-elevated);
+  border-top: 1px solid var(--stia-border);
+}
+
+.stia-image-viewer__hint {
+  color: var(--stia-accent-text);
+  text-align: center;
+  font-size: 13px;
+}
+
+.stia-image-viewer__meta,
+.stia-image-viewer__status {
+  min-height: 0;
+  margin: 0;
+  color: var(--stia-muted);
+  text-align: center;
+  font-size: 11px;
+}
+
+.stia-image-viewer__prompt {
+  margin: 0;
+  color: var(--stia-muted);
+  font-size: 11px;
+}
+
+.stia-image-viewer__prompt summary {
+  min-height: 28px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.stia-image-viewer__prompt pre {
+  max-height: 120px;
+  overflow: auto;
+  margin: 4px 0 0;
+  padding: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--stia-secondary);
+  background: var(--stia-input);
+  border-radius: 8px;
+}
+
+.stia-image-viewer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.stia-image-viewer__actions > .stia-button {
+  flex: 1 1 140px;
+  max-width: 240px;
+}
+
+@media (max-width: 640px) {
+  .stia-overlay {
+    padding: 0;
+  }
+
+  .stia-panel {
+    width: 100%;
+    height: 100dvh;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .stia-form-grid,
+  .stia-form-grid--compact {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .stia-form-grid--compact > :last-child {
+    grid-column: 1 / -1;
+  }
+
+  .stia-field--wide {
+    grid-column: auto;
+  }
+
+  .stia-inline-control {
+    flex-wrap: wrap;
+  }
+
+  .stia-inline-control > .stia-button {
+    flex: 1 1 auto;
+  }
+
+  .stia-health {
+    display: none;
+  }
+}
+
+@media (max-width: 400px) {
+  .stia-form-grid,
+  .stia-form-grid--compact {
+    grid-template-columns: 1fr;
+  }
+
+  .stia-form-grid--compact > :last-child {
+    grid-column: auto;
+  }
+
+  .stia-gallery-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stia-panel *,
+  .stia-card * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -40,12 +40,12 @@ https://github.com/phyllis-0612/st-image-atelier
 ### NovelAI
 
 1. 切换到「NovelAI」。NAI 固定使用免服务端直连，不需要 Server Plugin。
-2. 在「NAI 中转站 / 兼容站 URL」填写中转地址，在「中转站 Key / NAI Token」填写中转站分配的 Key。插件默认按 NAI 原生兼容格式，以 `Authorization: Bearer <Key>` 请求 `/ai/generate-image`；地址也可直接填写完整生图端点。Aurora 中转可填写以 `/api` 或 `/api/v1` 结尾的地址，插件会自动归一化到 `/api/ai/generate-image`，不要把 GPT 的 `/api/v1` 当成最终 NAI 生图端点。
+2. 在「NAI 中转站 / 兼容站 URL」填写中转地址，在「中转站 Key / NAI Token」填写中转站分配的 Key。官方 NovelAI 与原生兼容站默认以 `Authorization: Bearer <Key>` 请求 `/ai/generate-image`；地址也可直接填写完整生图端点。Aurora 中转填写以 `/api` 或 `/api/v1` 结尾的地址即可，插件会自动归一化到实际的 `/api/generate-direct` 流式端点。
 3. 选择 NAI 模型、尺寸、采样器、步数、Prompt Guidance、种子与负面提示词。
-4. 在「画师串预设」中新建并命名风格串。生成时会按「画师串 → 标签正文 → 模型质量标签」自动拼接，不会修改聊天原文。
+4. 在「画师串预设」中新建并命名风格串，分别填写正面和负面画师串。生成时正面按「正面画师串 → 标签正文 → 模型质量标签」拼接，负面按「负面画师串 → 固定负面提示词」拼接，不会修改聊天原文。
 5. 点击「保存 NovelAI 配置」。此后手动和自动生图都会使用当前 NAI 模型与画师串预设。
 
-NAI 中转站 Key / NovelAI Token 与 GPT API Key 分开保存在当前酒馆账户存储中，不会写入扩展设置、聊天消息或图片元数据。中转站既可返回 NovelAI 原生 ZIP 图片包，也可返回常见 JSON/Base64 图片结构，插件会统一解析并逐张保存到酒馆图片目录。官方接口同样兼容：站点填写 `https://image.novelai.net` 即可。
+NAI 中转站 Key / NovelAI Token 与 GPT API Key 分开保存在当前酒馆账户存储中，不会写入扩展设置、聊天消息或图片元数据。中转站既可返回 NovelAI 原生 ZIP 图片包，也可返回常见 JSON/Base64 图片结构或 Aurora 的 NDJSON 流；插件会统一解析、补全相对图片地址，并逐张保存到酒馆图片目录。官方接口同样兼容：站点填写 `https://image.novelai.net` 即可。
 
 NAI 中转站需要兼容 NovelAI 的原生生图请求体（`input`、`model`、`action`、`parameters`），并允许 SillyTavern 页面来源进行 CORS 跨域访问。若中转站只提供 OpenAI `/v1/images/generations` 格式，请改用「GPT / OpenAI」引擎；这种接口不是 NAI 原生协议，是否支持 NAI 专属采样参数取决于中转站。
 
@@ -58,7 +58,7 @@ NAI 中转站需要兼容 NovelAI 的原生生图请求体（`input`、`model`�
 - URL 与 Base64 返回都会立即上传到当前 SillyTavern 用户的图片目录。
 - 多 API 命名预设、独立密钥、模型下拉选择与快速切换。
 - GPT / OpenAI-compatible 与 NovelAI 双引擎一键切换；NAI 支持独立站点、Token、模型和常用生成参数。
-- 可命名、新建、删除和快速切换 NovelAI 画师串预设，并保留每张图实际使用的模型、画师预设与随机种子元数据。
+- 可命名、新建、删除和快速切换包含独立正面/负面内容的 NovelAI 画师串预设，并保留每张图实际使用的模型、画师预设与随机种子元数据。
 - 生图失败会显示上游 HTTP 状态和经过脱敏的真实错误原因。
 - 若上游内容审核拒绝提示词，会明确显示审核原因，不再混用参数不支持提示。
 - 紧凑的五态消息卡片、分区设置页与双列响应式画廊。
