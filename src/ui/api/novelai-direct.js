@@ -53,7 +53,7 @@ export function normalizeNovelAiEndpoint(baseUrl, generationPath = '/ai/generate
   } catch {
     throw new DirectError('VALIDATION_FAILED', 'NAI 中转站 / 站点地址无效');
   }
-  if (/\/ai\/generate-image\/?$/i.test(url.pathname)) {
+  if (/(?:\/ai\/generate-image|\/generate-direct)\/?$/i.test(url.pathname)) {
     url.pathname = url.pathname.replace(/\/+$/, '');
     url.search = '';
     url.hash = '';
@@ -63,17 +63,16 @@ export function normalizeNovelAiEndpoint(baseUrl, generationPath = '/ai/generate
     .split('/')
     .filter(Boolean)
     .join('/')}`;
-  // Some multi-protocol relays expose OpenAI under /api/v1 but keep their
-  // NovelAI-native route under /api/ai/generate-image. Aurora is one common
-  // example. Accepting the familiar GPT base URL here avoids producing the
-  // invalid /api/v1/ai/generate-image route while leaving custom NAI paths
-  // untouched.
+  // Aurora-compatible relays accept the website/API base as /api (or the
+  // familiar OpenAI-style /api/v1) but expose NAI generation at
+  // /api/generate-direct. Custom paths remain untouched so native NovelAI
+  // relays can still use /ai/generate-image or another explicit route.
   if (normalizedPath.toLowerCase() === '/ai/generate-image'
-    && /\/api\/v1\/?$/i.test(url.pathname)) {
+    && /\/api(?:\/v1)?\/?$/i.test(url.pathname)) {
     url.pathname = url.pathname.replace(/\/v1\/?$/i, '');
     url.search = '';
     url.hash = '';
-    return normalizeEndpoint(url.toString(), normalizedPath);
+    return normalizeEndpoint(url.toString(), '/generate-direct');
   }
   return normalizeEndpoint(baseUrl, normalizedPath);
 }
@@ -81,6 +80,10 @@ export function normalizeNovelAiEndpoint(baseUrl, generationPath = '/ai/generate
 export function composeNovelAiPrompt(prompt, artistPrompt = '', config = {}) {
   const quality = config.qualityTags === false ? '' : QUALITY_TAGS[config.model] || '';
   return joinPrompt(artistPrompt, prompt, quality);
+}
+
+export function composeNovelAiNegativePrompt(artistNegativePrompt = '', config = {}) {
+  return joinPrompt(artistNegativePrompt, config.negativePrompt);
 }
 
 function randomSeed() {
@@ -117,7 +120,14 @@ function varietySigma(model) {
   return 19;
 }
 
-export function buildNovelAiPayload({ config, prompt, artistPrompt, size, count }) {
+export function buildNovelAiPayload({
+  config,
+  prompt,
+  artistPrompt,
+  artistNegativePrompt,
+  size,
+  count,
+}) {
   if (!config?.model) throw new DirectError('MODEL_NOT_SELECTED');
   if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) {
     throw new DirectError('VALIDATION_FAILED', '提示词必须为 1-20000 个字符');
@@ -126,7 +136,10 @@ export function buildNovelAiPayload({ config, prompt, artistPrompt, size, count 
   if (resolvedPrompt.length > 20_000) {
     throw new DirectError('VALIDATION_FAILED', '画师串与正文合计不能超过 20000 个字符');
   }
-  const negativePrompt = String(config.negativePrompt || '').trim();
+  const negativePrompt = composeNovelAiNegativePrompt(artistNegativePrompt, config);
+  if (negativePrompt.length > 20_000) {
+    throw new DirectError('VALIDATION_FAILED', '负面画师串与固定负面提示词合计不能超过 20000 个字符');
+  }
   const { width, height } = parseSize(size || config.defaultSize);
   const model = String(config.model);
   const samples = Math.round(finiteNumber(count ?? config.defaultCount, 1, 1, 4));
@@ -190,6 +203,7 @@ export function buildNovelAiPayload({ config, prompt, artistPrompt, size, count 
   }
   return {
     resolvedPrompt,
+    resolvedNegativePrompt: negativePrompt,
     seed,
     body: {
       input: resolvedPrompt,
@@ -199,6 +213,90 @@ export function buildNovelAiPayload({ config, prompt, artistPrompt, size, count 
       use_new_shared_trial: true,
     },
   };
+}
+
+function streamImageSource(value, endpoint, generationIndex) {
+  const source = String(value || '').trim();
+  if (!source) return null;
+  const dataUrl = /^data:[^;,]+;base64,(.+)$/is.exec(source);
+  if (dataUrl) {
+    return { sourceType: 'base64', value: dataUrl[1].replace(/\s+/g, ''), generationIndex };
+  }
+  let absoluteUrl;
+  try {
+    absoluteUrl = new URL(source, endpoint).toString();
+  } catch {
+    throw new DirectError('UPSTREAM_RESPONSE_INVALID', 'NAI 中转站返回了无效的图片地址');
+  }
+  return { sourceType: 'url', value: absoluteUrl, generationIndex };
+}
+
+async function parseNovelAiNdjson(response, endpoint, maxImageBytes) {
+  if (!response.body?.getReader) {
+    throw new DirectError('UPSTREAM_RESPONSE_INVALID', '当前浏览器无法读取 NAI 中转站的流式响应');
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const maxResponseBytes = Math.min(
+    4 * 1024 * 1024,
+    Math.max(1024 * 1024, maxImageBytes),
+  );
+  const sources = [];
+  let bytesRead = 0;
+  let buffer = '';
+
+  const processLine = rawLine => {
+    const line = rawLine.trim().replace(/^data:\s*/i, '');
+    if (!line || line === '[DONE]') return;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      throw new DirectError('UPSTREAM_RESPONSE_INVALID', 'NAI 中转站返回了无效的流式 JSON');
+    }
+    if (event?.status === 'error') {
+      const reason = String(event.data || event.error || event.message || '生成失败').slice(0, 1000);
+      throw new DirectError(
+        'UPSTREAM_HTTP_ERROR',
+        reason,
+        502,
+        false,
+        `NovelAI 生图失败：${reason}`,
+      );
+    }
+    if (event?.status !== 'success') return;
+    const values = Array.isArray(event.urls)
+      ? event.urls
+      : Array.isArray(event.images)
+        ? event.images
+        : [event.url || event.image].filter(Boolean);
+    for (const value of values) {
+      if (sources.length >= 4) break;
+      const source = streamImageSource(value, endpoint, sources.length);
+      if (source) sources.push(source);
+    }
+  };
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (value) {
+      bytesRead += value.byteLength;
+      if (bytesRead > maxResponseBytes) {
+        throw new DirectError('UPSTREAM_RESPONSE_INVALID', 'NAI 中转站的流式响应过大');
+      }
+      buffer += decoder.decode(value, { stream: true });
+    }
+    if (done) buffer += decoder.decode();
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || '';
+    for (const line of lines) processLine(line);
+    if (done) break;
+  }
+  if (buffer.trim()) processLine(buffer);
+  if (!sources.length) {
+    throw new DirectError('UPSTREAM_RESPONSE_INVALID', 'NAI 中转站的流式响应中没有图片');
+  }
+  return sources;
 }
 
 function findEndOfCentralDirectory(bytes) {
@@ -307,6 +405,9 @@ async function fetchNovelAi(url, options, timeoutMs, maxImageBytes) {
     const response = await fetch(url, { ...options, signal: controller.signal, redirect: 'error' });
     if (!response.ok) throw mapNovelAiError(response.status, (await response.text()).slice(0, 1000));
     const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('ndjson') || contentType.includes('jsonlines')) {
+      return await parseNovelAiNdjson(response, url, maxImageBytes);
+    }
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.byteLength > maxImageBytes * 4) {
       throw new DirectError('IMAGE_DOWNLOAD_FAILED', 'NovelAI 返回的图片包超过大小限制');
@@ -364,6 +465,7 @@ export async function generateNovelAiImages({
   config,
   apiKey,
   artistPrompt,
+  artistNegativePrompt,
   prompt,
   parameters,
   settings,
@@ -380,6 +482,7 @@ export async function generateNovelAiImages({
     config,
     prompt,
     artistPrompt,
+    artistNegativePrompt,
     size: parameters.size || config.defaultSize,
     count: parameters.count || config.defaultCount,
   });
@@ -392,5 +495,10 @@ export async function generateNovelAiImages({
     body: JSON.stringify(built.body),
     signal,
   }, config.timeoutMs || 180_000, settings.maxImageBytes || 30 * 1024 * 1024);
-  return { sources, resolvedPrompt: built.resolvedPrompt, seed: built.seed };
+  return {
+    sources,
+    resolvedPrompt: built.resolvedPrompt,
+    resolvedNegativePrompt: built.resolvedNegativePrompt,
+    seed: built.seed,
+  };
 }
