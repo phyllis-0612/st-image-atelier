@@ -84,6 +84,37 @@ export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCa
     root.replaceChildren();
     root.className = 'stia-card';
 
+    if (attempt && ACTIVE_STATUSES.has(attempt.status)) {
+      const body = document.createElement('div');
+      body.className = 'stia-card__body';
+      const isAutoQueue = attempt.status === 'queued' && attempt.requestMode === 'auto';
+      const isRegenerating = Boolean(latest) && !isAutoQueue;
+      root.classList.add(isAutoQueue ? 'stia-card--queued' : 'stia-card--generating');
+      body.append(statusHeading(
+        isAutoQueue ? '◷' : '◌',
+        isAutoQueue
+          ? '自动排队中'
+          : (isRegenerating ? '正在重新生成…' : (STATUS_TEXT[attempt.status] || '处理中')),
+        isAutoQueue
+          ? '等待当前生成任务完成'
+          : `${attempt.model || '当前模型'} · ${size || '默认尺寸'}`,
+        isAutoQueue ? 'is-warning' : 'is-accent',
+      ));
+      if (!isAutoQueue) {
+        const shimmer = document.createElement('div');
+        shimmer.className = 'stia-card__shimmer';
+        body.append(shimmer);
+      }
+      body.append(button(
+        isAutoQueue ? '取消排队' : '取消',
+        'stia-button--ghost stia-button--full',
+        () => onCancel(attempt.attemptId),
+        '×',
+      ));
+      root.append(body);
+      return;
+    }
+
     if (latest) {
       root.classList.add('stia-card--succeeded');
       const media = document.createElement('div');
@@ -133,30 +164,6 @@ export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCa
 
     const body = document.createElement('div');
     body.className = 'stia-card__body';
-    if (attempt && ACTIVE_STATUSES.has(attempt.status)) {
-      const isAutoQueue = attempt.status === 'queued' && attempt.requestMode === 'auto';
-      root.classList.add(isAutoQueue ? 'stia-card--queued' : 'stia-card--generating');
-      body.append(statusHeading(
-        isAutoQueue ? '◷' : '◌',
-        isAutoQueue ? '自动排队中' : (STATUS_TEXT[attempt.status] || '处理中'),
-        isAutoQueue ? '等待当前生成任务完成' : `${attempt.model || '当前模型'} · ${size || '默认尺寸'}`,
-        isAutoQueue ? 'is-warning' : 'is-accent',
-      ));
-      if (!isAutoQueue) {
-        const shimmer = document.createElement('div');
-        shimmer.className = 'stia-card__shimmer';
-        body.append(shimmer);
-      }
-      body.append(button(
-        isAutoQueue ? '取消排队' : '取消',
-        'stia-button--ghost stia-button--full',
-        () => onCancel(attempt.attemptId),
-        '×',
-      ));
-      root.append(body);
-      return;
-    }
-
     if (attempt && ['failed', 'interrupted', 'cancelled'].includes(attempt.status)) {
       root.classList.add('stia-card--failed');
       body.append(statusHeading(
