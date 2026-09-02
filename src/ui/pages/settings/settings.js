@@ -67,6 +67,29 @@ function action(label, handler, primary = false) {
   return element;
 }
 
+function safeFilename(value) {
+  return String(value || 'artist-presets')
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '-')
+    .replace(/[. ]+$/g, '')
+    .slice(0, 60) || 'artist-presets';
+}
+
+function downloadJson(filename, value) {
+  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], {
+    type: 'application/json;charset=utf-8',
+  });
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = filename;
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 0);
+}
+
 export function createToolPanel({ api, store }) {
   const overlay = document.createElement('div');
   overlay.className = 'stia-overlay';
@@ -188,7 +211,7 @@ export function createToolPanel({ api, store }) {
   novelAiTimeout.max = '600';
   const novelAiNegative = document.createElement('textarea');
   novelAiNegative.rows = 4;
-  novelAiNegative.placeholder = '不希望画面中出现的内容，可留空';
+  novelAiNegative.placeholder = '所有画师预设都会附加的全局负面词；通常留空';
   const novelAiQualityTags = input('checkbox');
   const novelAiSmea = input('checkbox');
   const novelAiSmeaDyn = input('checkbox');
@@ -200,7 +223,13 @@ export function createToolPanel({ api, store }) {
   artistName.placeholder = '例如：柔光厚涂、赛璐璐';
   const artistPrompt = document.createElement('textarea');
   artistPrompt.rows = 4;
-  artistPrompt.placeholder = '输入画师标签或风格串；生成时会自动放在正文提示词前';
+  artistPrompt.placeholder = '输入正面画师标签或风格串；生成时会自动放在正文提示词前';
+  const artistNegativePrompt = document.createElement('textarea');
+  artistNegativePrompt.rows = 4;
+  artistNegativePrompt.placeholder = '输入这套画师串配套的负面标签；可留空';
+  const artistImportInput = input('file');
+  artistImportInput.accept = '.json,application/json';
+  artistImportInput.hidden = true;
   const status = document.createElement('p');
   status.className = 'stia-status';
   status.setAttribute('role', 'status');
@@ -311,6 +340,7 @@ export function createToolPanel({ api, store }) {
     artistSelector.value = preset.id;
     artistName.value = preset.name || '';
     artistPrompt.value = preset.prompt || '';
+    artistNegativePrompt.value = preset.negativePrompt || '';
   }
 
   function loadNovelAiFields(config) {
@@ -356,6 +386,7 @@ export function createToolPanel({ api, store }) {
     const preset = await api.updateArtistPreset(presetId, {
       name: artistName.value.trim() || '未命名画师串',
       prompt: artistPrompt.value.trim(),
+      negativePrompt: artistNegativePrompt.value.trim(),
     });
     const index = artistPresets.findIndex(item => item.id === preset.id);
     if (index >= 0) artistPresets[index] = preset;
@@ -573,6 +604,65 @@ export function createToolPanel({ api, store }) {
   artistPresetRow.className = 'stia-inline-control';
   artistPresetRow.append(artistSelector, createArtistPreset, deleteArtistPreset);
 
+  const exportCurrentArtistPreset = action('⇧ 导出当前', async () => {
+    await run(exportCurrentArtistPreset, async () => {
+      const preset = await saveCurrentArtistPreset();
+      const payload = await api.exportArtistPresets({ presetIds: [preset.id] });
+      downloadJson(`image-atelier-${safeFilename(preset.name)}.json`, payload);
+      store.set({ artistPreset: preset });
+      status.textContent = `已导出画师串“${preset.name}”`;
+    });
+  });
+
+  const exportAllArtistPresets = action('⇧ 导出全部', async () => {
+    await run(exportAllArtistPresets, async () => {
+      const preset = await saveCurrentArtistPreset();
+      const payload = await api.exportArtistPresets();
+      const date = new Date().toISOString().slice(0, 10);
+      downloadJson(`image-atelier-artist-presets-${date}.json`, payload);
+      store.set({ artistPreset: preset });
+      status.textContent = `已导出 ${payload.presets.length} 条非空画师串预设`;
+    });
+  });
+
+  const importArtistPresets = action('⇩ 导入 JSON', () => {
+    artistImportInput.value = '';
+    artistImportInput.click();
+  });
+
+  artistImportInput.addEventListener('change', async () => {
+    const file = artistImportInput.files?.[0];
+    if (!file) return;
+    await run(importArtistPresets, async () => {
+      if (file.size > 2 * 1024 * 1024) throw new Error('分享文件不能超过 2 MB');
+      await saveCurrentArtistPreset();
+      let payload;
+      try {
+        payload = JSON.parse(await file.text());
+      } catch {
+        throw new Error('无法读取这个 JSON 文件，请确认文件内容完整');
+      }
+      const result = await api.importArtistPresets(payload);
+      artistPresets = result.artistPresets;
+      activeArtistPresetId = result.activeArtistPresetId;
+      updateArtistSelector(activeArtistPresetId);
+      loadArtistFields(result.activeArtistPreset);
+      store.set({ artistPreset: result.activeArtistPreset });
+      status.textContent = result.skippedCount
+        ? `已导入 ${result.importedCount} 条，跳过 ${result.skippedCount} 条完全重复的画师串`
+        : `已导入 ${result.importedCount} 条画师串预设`;
+    });
+  });
+
+  const artistTransferActions = document.createElement('div');
+  artistTransferActions.className = 'stia-actions stia-actions--fill';
+  artistTransferActions.append(
+    exportCurrentArtistPreset,
+    exportAllArtistPresets,
+    importArtistPresets,
+    artistImportInput,
+  );
+
   artistSelector.addEventListener('change', async () => {
     const nextId = artistSelector.value;
     const previousId = activeArtistPresetId;
@@ -706,17 +796,19 @@ export function createToolPanel({ api, store }) {
 
   const artistHeading = document.createElement('h4');
   artistHeading.className = 'stia-subheading';
-  artistHeading.textContent = '画师串预设';
+  artistHeading.textContent = '画师串预设（每套独立正面 + 负面）';
   const artistGrid = document.createElement('div');
   artistGrid.className = 'stia-form-stack stia-artist-preset';
   artistGrid.append(
     field('选择预设', artistPresetRow),
+    field('预设分享（JSON）', artistTransferActions),
     field('预设名称', artistName),
-    field('画师串 / 风格串', artistPrompt),
+    field('正面画师串 / 风格串', artistPrompt),
+    field('该预设的负面画师串 / 排除串', artistNegativePrompt),
   );
   const artistHint = document.createElement('small');
   artistHint.className = 'stia-muted';
-  artistHint.textContent = '生成时按“画师串 → 正文提示词 → 质量标签”的顺序自动组合；不会改写聊天正文。';
+  artistHint.textContent = '切换画师预设时，名称、正面串和负面串会一起保存并切换。正面按“该预设正面串 → 正文 → 质量标签”组合；负面按“该预设负面串 → 全局附加负面词”组合。';
   artistGrid.append(artistHint);
 
   const novelAiParametersHeading = document.createElement('h4');
@@ -754,7 +846,7 @@ export function createToolPanel({ api, store }) {
     field('Guidance Rescale', novelAiCfgRescale),
     field('生图路径', novelAiGenerationPath),
     field('超时（秒）', novelAiTimeout),
-    field('固定负面提示词', novelAiNegative),
+    field('全局附加负面提示词（所有预设共用，可留空）', novelAiNegative),
   );
   novelAiAdvanced.append(novelAiAdvancedSummary, novelAiAdvancedGrid);
 
@@ -764,7 +856,7 @@ export function createToolPanel({ api, store }) {
   novelAiActions.append(saveNovelAi);
   const novelAiNotice = document.createElement('p');
   novelAiNotice.className = 'stia-warning';
-  novelAiNotice.textContent = '优先支持 NAI 原生格式中转站：填写中转站 URL 与中转 Key，插件会以 Bearer 鉴权调用 /ai/generate-image。Aurora 可填写以 /api 或 /api/v1 结尾的地址，插件会自动请求 /api/ai/generate-image。也可直接填写完整生图端点；兼容 ZIP、JSON/Base64 图片返回。Key 只保存在当前酒馆账户中。';
+  novelAiNotice.textContent = '支持 NAI 原生站与 Aurora 中转：官方/原生站使用 /ai/generate-image；Aurora 可填写以 /api 或 /api/v1 结尾的地址，插件会自动请求 /api/generate-direct。也可直接填写完整生图端点；兼容 ZIP、JSON/Base64 与流式 NDJSON 图片返回。Key 只保存在当前酒馆账户中。';
   novelAiSection.append(
     novelAiTitle,
     novelAiGrid,
