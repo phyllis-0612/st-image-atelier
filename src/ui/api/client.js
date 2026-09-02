@@ -127,6 +127,8 @@ export function createApiClient({
     selectArtistPreset: presetId => direct.selectArtistPreset(presetId),
     createArtistPreset: input => direct.createArtistPreset(input),
     updateArtistPreset: (presetId, patch) => direct.updateArtistPreset(presetId, patch),
+    exportArtistPresets: options => direct.exportArtistPresets(options),
+    importArtistPresets: payload => direct.importArtistPresets(payload),
     deleteArtistPreset: presetId => direct.deleteArtistPreset(presetId),
     selectPreset: presetId => direct.mode() === 'direct'
       ? direct.selectPreset(presetId)
