@@ -211,7 +211,7 @@ export function createToolPanel({ api, store }) {
   novelAiTimeout.max = '600';
   const novelAiNegative = document.createElement('textarea');
   novelAiNegative.rows = 4;
-  novelAiNegative.placeholder = '不希望画面中出现的内容，可留空';
+  novelAiNegative.placeholder = '所有画师预设都会附加的全局负面词；通常留空';
   const novelAiQualityTags = input('checkbox');
   const novelAiSmea = input('checkbox');
   const novelAiSmeaDyn = input('checkbox');
@@ -604,7 +604,7 @@ export function createToolPanel({ api, store }) {
   artistPresetRow.className = 'stia-inline-control';
   artistPresetRow.append(artistSelector, createArtistPreset, deleteArtistPreset);
 
-  const exportCurrentArtistPreset = action('导出当前', async () => {
+  const exportCurrentArtistPreset = action('⇧ 导出当前', async () => {
     await run(exportCurrentArtistPreset, async () => {
       const preset = await saveCurrentArtistPreset();
       const payload = await api.exportArtistPresets({ presetIds: [preset.id] });
@@ -614,7 +614,7 @@ export function createToolPanel({ api, store }) {
     });
   });
 
-  const exportAllArtistPresets = action('导出全部', async () => {
+  const exportAllArtistPresets = action('⇧ 导出全部', async () => {
     await run(exportAllArtistPresets, async () => {
       const preset = await saveCurrentArtistPreset();
       const payload = await api.exportArtistPresets();
@@ -625,7 +625,7 @@ export function createToolPanel({ api, store }) {
     });
   });
 
-  const importArtistPresets = action('导入 JSON', () => {
+  const importArtistPresets = action('⇩ 导入 JSON', () => {
     artistImportInput.value = '';
     artistImportInput.click();
   });
@@ -796,19 +796,19 @@ export function createToolPanel({ api, store }) {
 
   const artistHeading = document.createElement('h4');
   artistHeading.className = 'stia-subheading';
-  artistHeading.textContent = '画师串预设';
+  artistHeading.textContent = '画师串预设（每套独立正面 + 负面）';
   const artistGrid = document.createElement('div');
   artistGrid.className = 'stia-form-stack stia-artist-preset';
   artistGrid.append(
     field('选择预设', artistPresetRow),
+    field('预设分享（JSON）', artistTransferActions),
     field('预设名称', artistName),
     field('正面画师串 / 风格串', artistPrompt),
-    field('负面画师串 / 排除串', artistNegativePrompt),
-    artistTransferActions,
+    field('该预设的负面画师串 / 排除串', artistNegativePrompt),
   );
   const artistHint = document.createElement('small');
   artistHint.className = 'stia-muted';
-  artistHint.textContent = '正面按“正面画师串 → 正文提示词 → 质量标签”组合；负面按“负面画师串 → 固定负面提示词”组合；不会改写聊天正文。';
+  artistHint.textContent = '切换画师预设时，名称、正面串和负面串会一起保存并切换。正面按“该预设正面串 → 正文 → 质量标签”组合；负面按“该预设负面串 → 全局附加负面词”组合。';
   artistGrid.append(artistHint);
 
   const novelAiParametersHeading = document.createElement('h4');
@@ -846,7 +846,7 @@ export function createToolPanel({ api, store }) {
     field('Guidance Rescale', novelAiCfgRescale),
     field('生图路径', novelAiGenerationPath),
     field('超时（秒）', novelAiTimeout),
-    field('固定负面提示词', novelAiNegative),
+    field('全局附加负面提示词（所有预设共用，可留空）', novelAiNegative),
   );
   novelAiAdvanced.append(novelAiAdvancedSummary, novelAiAdvancedGrid);
 

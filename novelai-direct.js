@@ -47,9 +47,15 @@ function joinPrompt(...parts) {
 }
 
 export function normalizeNovelAiEndpoint(baseUrl, generationPath = '/ai/generate-image') {
+  const sanitizedBaseUrl = String(baseUrl || '')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .trim();
+  const sanitizedGenerationPath = String(generationPath || '/ai/generate-image')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .trim();
   let url;
   try {
-    url = new URL(baseUrl);
+    url = new URL(sanitizedBaseUrl);
   } catch {
     throw new DirectError('VALIDATION_FAILED', 'NAI 中转站 / 站点地址无效');
   }
@@ -59,7 +65,7 @@ export function normalizeNovelAiEndpoint(baseUrl, generationPath = '/ai/generate
     url.hash = '';
     return url.toString().replace(/\/$/, '');
   }
-  const normalizedPath = `/${String(generationPath || '/ai/generate-image')
+  const normalizedPath = `/${sanitizedGenerationPath
     .split('/')
     .filter(Boolean)
     .join('/')}`;
@@ -74,7 +80,7 @@ export function normalizeNovelAiEndpoint(baseUrl, generationPath = '/ai/generate
     url.hash = '';
     return normalizeEndpoint(url.toString(), '/generate-direct');
   }
-  return normalizeEndpoint(baseUrl, normalizedPath);
+  return normalizeEndpoint(sanitizedBaseUrl, normalizedPath);
 }
 
 export function composeNovelAiPrompt(prompt, artistPrompt = '', config = {}) {

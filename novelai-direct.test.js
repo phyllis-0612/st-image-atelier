@@ -99,6 +99,17 @@ test('Aurora 常见的 /api 与 /api/v1 地址会自动切换到流式 NAI 路�
     normalizeNovelAiEndpoint('https://relay.example/api/v1', '/custom/nai'),
     'https://relay.example/api/v1/custom/nai',
   );
+  assert.equal(
+    normalizeNovelAiEndpoint('https://relay.example/api\u200B', '/ai/generate-image'),
+    'https://relay.example/api/generate-direct',
+  );
+  assert.equal(
+    normalizeNovelAiEndpoint(
+      'https://relay.example/api/generate-direct\u2060',
+      '/ai/generate-image\uFEFF',
+    ),
+    'https://relay.example/api/generate-direct',
+  );
 });
 
 test('NovelAI V4.5 请求包含官方提示词结构和可复现种子', () => {
