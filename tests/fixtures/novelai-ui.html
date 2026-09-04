@@ -13,6 +13,7 @@
 <script type="module">
   import { createToolPanel } from '/src/ui/pages/settings/settings.js';
   import { createStore } from '/src/ui/state/store.js';
+  import { applyThemeMode } from '/src/ui/theme/theme.js';
 
   const clone = value => structuredClone(value);
   let settings = {
@@ -20,6 +21,7 @@
     autoGenerate: true,
     generationProvider: 'novelai',
     executionMode: 'direct',
+    themeMode: 'tavern',
     allowHttp: false,
   };
   let openAiPreset = {
@@ -109,10 +111,15 @@
       return { activeArtistPreset: clone(artists[0]) };
     },
     gallery: async () => ({ items: [], nextCursor: null }),
+    cleanupGallery: async () => ({
+      enabled: false, deletedCount: 0, failedCount: 0, keptCount: 0,
+    }),
     deleteResult: async () => ({}),
     fileUrl: () => '',
   };
   const store = createStore();
+  store.subscribe(state => applyThemeMode(state.settings.themeMode));
+  applyThemeMode(store.state.settings.themeMode);
   const panel = createToolPanel({ api, store });
   panel.show();
   window.uiTest = { api, store, panel };

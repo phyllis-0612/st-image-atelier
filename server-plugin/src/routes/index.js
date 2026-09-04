@@ -29,7 +29,7 @@ function registerRoutes(router, registry = new ServiceRegistry()) {
     await registry.get(request);
     ok(response, {
       id: 'st-image-atelier',
-      version: '1.0.0',
+      version: '1.5.0',
       status: 'ready',
       schemaVersion: 1,
     });
@@ -117,6 +117,12 @@ function registerRoutes(router, registry = new ServiceRegistry()) {
       cursor: request.query?.cursor,
       limit: Number(request.query?.limit) || 30,
     }));
+  }));
+
+  router.post('/gallery/cleanup', asyncRoute(async (request, response) => {
+    const services = await registry.get(request);
+    const settings = await services.preset.getSettings();
+    ok(response, await services.gallery.cleanup(settings));
   }));
 
   router.get('/gallery/:resultId/file', asyncRoute(async (request, response) => {

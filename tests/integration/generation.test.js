@@ -212,3 +212,46 @@ test('原图查看使用 inline 响应，兼容下载端点仍使用 attachment'
   assert.match((await streamHeaders(false))['content-disposition'], /^inline;/);
   assert.match((await streamHeaders(true))['content-disposition'], /^attachment;/);
 });
+
+test('服务端画廊按时间和数量规则自动清理最旧图片', async t => {
+  const f = await fixture(t);
+  const generated = [];
+  for (let index = 0; index < 4; index += 1) {
+    const input = request('base64');
+    await f.generation.generate(input);
+    const attempt = await waitForAttempt(f.metadata, input.attemptId);
+    generated.push({ input, resultId: attempt.resultIds[0] });
+  }
+  const currentTime = Date.now();
+  const ages = [10, 5, 2, 1];
+  await f.metadata.transaction(index => {
+    generated.forEach((item, position) => {
+      index.results[item.resultId].createdAt = new Date(
+        currentTime - ages[position] * 24 * 60 * 60 * 1000,
+      ).toISOString();
+    });
+  });
+  const removedFiles = generated.slice(0, 2)
+    .map(item => f.storage.resolve(f.metadata.getResult(item.resultId).localRelativePath));
+  const keptFiles = generated.slice(2)
+    .map(item => f.storage.resolve(f.metadata.getResult(item.resultId).localRelativePath));
+  await f.preset.updateSettings({
+    galleryCleanupByAge: true,
+    galleryMaxAgeDays: 7,
+    galleryCleanupByCount: true,
+    galleryMaxCount: 2,
+  });
+  const cleanup = await f.gallery.cleanup(await f.preset.getSettings());
+  assert.equal(cleanup.deletedCount, 2);
+  assert.equal(cleanup.keptCount, 2);
+  assert.equal(cleanup.byAgeCount, 1);
+  assert.equal(cleanup.byCountCount, 2);
+  for (const file of removedFiles) {
+    await assert.rejects(fs.stat(file), error => error.code === 'ENOENT');
+  }
+  for (const file of keptFiles) assert.ok((await fs.stat(file)).size > 0);
+  for (const item of generated.slice(0, 2)) {
+    assert.equal(f.metadata.getResult(item.resultId).status, 'deleted');
+    assert.equal(f.metadata.getTag(item.input.tagId).autoSuppressed, true);
+  }
+});

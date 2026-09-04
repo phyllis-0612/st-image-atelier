@@ -428,3 +428,82 @@ test('NovelAI 引擎使用独立 Token、画师串预设并保存生成结果', 
   assert.equal(state.results[0].generationSeed, 42);
   assert.doesNotMatch(JSON.stringify(extensionSettings), /nai-secret-token/);
 });
+
+test('直连画廊按时间或数量自动清理，合并并发检查且同步消息墓碑', async t => {
+  const originalFetch = globalThis.fetch;
+  const now = Date.now();
+  const tagId = crypto.randomUUID();
+  const values = [
+    { age: 10, name: 'expired' },
+    { age: 5, name: 'overflow' },
+    { age: 2, name: 'middle' },
+    { age: 1, name: 'newest' },
+  ].map(({ age, name }) => ({
+    resultId: crypto.randomUUID(),
+    tagId,
+    prompt: name,
+    apiModel: 'test-model',
+    localRelativePath: `user/images/st-image-atelier/${name}.png`,
+    status: 'available',
+    createdAt: new Date(now - age * 24 * 60 * 60 * 1000).toISOString(),
+    deletedAt: null,
+  }));
+  const deletedPaths = [];
+  globalThis.fetch = async (url, options = {}) => {
+    assert.equal(url, '/api/images/delete');
+    deletedPaths.push(JSON.parse(options.body).path);
+    return response(200, {});
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  const tag = {
+    tagId,
+    results: structuredClone(values),
+    resultIds: values.map(item => item.resultId),
+    latestResultId: values.at(-1).resultId,
+    attempts: [],
+    autoSuppressed: false,
+  };
+  const message = { extra: { stImageAtelier: { tags: [tag] } } };
+  let chatSaves = 0;
+  let settingsSaves = 0;
+  const extensionSettings = {
+    stImageAtelier: {
+      settings: {
+        galleryCleanupByAge: true,
+        galleryMaxAgeDays: 7,
+        galleryCleanupByCount: true,
+        galleryMaxCount: 2,
+      },
+      gallery: structuredClone(values),
+    },
+  };
+  const client = createDirectApiClient({
+    compat: {
+      chat: () => [message],
+      save: async () => { chatSaves += 1; },
+      headers: () => ({ 'Content-Type': 'application/json' }),
+    },
+    extensionSettings,
+    saveSettingsDebounced: () => { settingsSaves += 1; },
+    keyStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  });
+
+  const [first, second] = await Promise.all([client.cleanupGallery(), client.cleanupGallery()]);
+  assert.deepEqual(first, second);
+  assert.equal(first.deletedCount, 2);
+  assert.equal(first.keptCount, 2);
+  assert.equal(first.byAgeCount, 1);
+  assert.equal(first.byCountCount, 2);
+  assert.deepEqual(deletedPaths, values.slice(0, 2).map(item => item.localRelativePath));
+  assert.equal(chatSaves, 1);
+  assert.equal(settingsSaves, 1);
+  assert.equal(tag.autoSuppressed, true);
+  assert.deepEqual(tag.resultIds, values.slice(2).map(item => item.resultId));
+  assert.equal(tag.latestResultId, values.at(-1).resultId);
+  assert.deepEqual((await client.gallery()).items.map(item => item.resultId), [
+    values[3].resultId,
+    values[2].resultId,
+  ]);
+  assert.equal((await client.resolveTags([tagId]))[0].results.filter(item => item.status === 'deleted').length, 2);
+});

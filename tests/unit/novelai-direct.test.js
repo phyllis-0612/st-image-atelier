@@ -71,18 +71,18 @@ test('NovelAI 站点可填写 Base URL 或完整生图端点', () => {
   );
   assert.equal(
     normalizeNovelAiEndpoint('https://relay.example/api', '/ai/generate-image'),
-    'https://relay.example/api/ai/generate-image',
+    'https://relay.example/api/generate-direct',
   );
 });
 
 test('Aurora 常见的 /api/v1 地址会自动切换到原生 NAI 路由', () => {
   assert.equal(
     normalizeNovelAiEndpoint('https://relay.example/api/v1', '/ai/generate-image'),
-    'https://relay.example/api/ai/generate-image',
+    'https://relay.example/api/generate-direct',
   );
   assert.equal(
     normalizeNovelAiEndpoint('https://relay.example/api/v1/', '/ai/generate-image'),
-    'https://relay.example/api/ai/generate-image',
+    'https://relay.example/api/generate-direct',
   );
   assert.equal(
     normalizeNovelAiEndpoint('https://relay.example/api/v1', '/custom/nai'),

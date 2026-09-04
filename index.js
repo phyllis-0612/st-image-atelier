@@ -15,6 +15,7 @@ import { createMessageRenderer } from './src/ui/renderer/message-renderer.js';
 import { createMessageEvents } from './src/ui/events/message-events.js';
 import { createToolPanel } from './src/ui/pages/settings/settings.js';
 import { installToolMenuEntry } from './src/ui/menu/tool-menu.js';
+import { applyThemeMode } from './src/ui/theme/theme.js';
 
 const compat = createStCompat({
   getContext,
@@ -32,8 +33,20 @@ const api = createApiClient({
 const store = createStore();
 store.subscribe(state => {
   document.documentElement.classList.toggle('stia-disabled', !state.settings.enabled);
+  applyThemeMode(state.settings.themeMode);
 });
+applyThemeMode(store.state.settings.themeMode);
 const activeTags = new Set();
+const GALLERY_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+
+async function runGalleryCleanup() {
+  try {
+    return await api.cleanupGallery();
+  } catch (error) {
+    console.warn('[Image Atelier] 画廊自动清理检查失败', error);
+    return null;
+  }
+}
 
 function uuid() {
   return globalThis.crypto?.randomUUID?.()
@@ -98,9 +111,12 @@ async function generate(tag, mode) {
     });
     if (['succeeded', 'failed', 'interrupted', 'cancelled'].includes(attempt.status)) {
       await refreshTag(tag.tagId);
+      if (attempt.status === 'succeeded') void runGalleryCleanup();
       return attempt;
     }
-    return await waitForAttempt(attempt.attemptId, tag.tagId);
+    const completed = await waitForAttempt(attempt.attemptId, tag.tagId);
+    if (completed.status === 'succeeded') void runGalleryCleanup();
+    return completed;
   } catch (error) {
     try {
       await refreshTag(tag.tagId);
@@ -153,6 +169,8 @@ function initialize() {
   installToolButton();
   events.bind();
   void events.hydrate();
+  void runGalleryCleanup();
+  setInterval(() => void runGalleryCleanup(), GALLERY_CLEANUP_INTERVAL_MS);
 }
 
 if (document.readyState === 'loading') {

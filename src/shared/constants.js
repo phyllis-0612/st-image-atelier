@@ -1,7 +1,7 @@
 export const MODULE_NAME = 'stImageAtelier';
 export const DISPLAY_NAME = 'Image Atelier';
 export const API_ROOT = '/api/plugins/st-image-atelier';
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const ATTEMPT_STATUS = Object.freeze({
   IDLE: 'idle',
@@ -45,6 +45,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
   autoGenerate: false,
   generationProvider: 'openai',
   executionMode: 'direct',
+  themeMode: 'tavern',
+  galleryCleanupByAge: false,
+  galleryMaxAgeDays: 7,
+  galleryCleanupByCount: false,
+  galleryMaxCount: 200,
   allowHttp: false,
   maxImageBytes: 30 * 1024 * 1024,
   downloadTimeoutMs: 60_000,

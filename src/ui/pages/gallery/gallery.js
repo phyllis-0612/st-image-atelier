@@ -87,6 +87,11 @@ export function createGalleryPage(api) {
       empty.remove();
     }
     try {
+      if (reset) {
+        await api.cleanupGallery().catch(error => {
+          console.warn('[Image Atelier] 打开画廊时自动清理失败', error);
+        });
+      }
       const page = await api.gallery({ cursor });
       page.items.forEach(addCard);
       count.textContent = `${grid.children.length} 张`;

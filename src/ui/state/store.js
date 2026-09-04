@@ -2,7 +2,12 @@ export function createStore() {
   const listeners = new Set();
   const state = {
     health: null,
-    settings: { enabled: true, autoGenerate: false, generationProvider: 'openai' },
+    settings: {
+      enabled: true,
+      autoGenerate: false,
+      generationProvider: 'openai',
+      themeMode: 'tavern',
+    },
     preset: null,
     novelAi: null,
     artistPreset: null,

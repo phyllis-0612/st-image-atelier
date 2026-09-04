@@ -70,6 +70,7 @@ export function createServerApiClient(compat) {
       if (cursor) query.set('cursor', cursor);
       return request(`/gallery?${query}`);
     },
+    cleanupGallery: () => request('/gallery/cleanup', { method: 'POST', body: '{}' }),
     deleteResult: resultId => request(`/gallery/${encodeURIComponent(resultId)}`, { method: 'DELETE' }),
     fileUrl: resultId => `${API_ROOT}/gallery/${encodeURIComponent(resultId)}/file`,
     downloadUrl: resultId => `${API_ROOT}/gallery/${encodeURIComponent(resultId)}/download`,
@@ -95,25 +96,31 @@ export function createApiClient({
     const local = await direct.getSettings();
     if (direct.mode() !== 'server') return local;
     const remote = await server.getSettings();
-    return { ...remote, executionMode: 'server' };
+    return {
+      ...remote,
+      executionMode: 'server',
+      generationProvider: local.generationProvider,
+      themeMode: local.themeMode,
+    };
   }
 
   async function updateSettings(patch) {
     const requestedMode = patch.executionMode || direct.mode();
-    if (Object.hasOwn(patch, 'generationProvider')) {
-      await direct.updateSettings({ generationProvider: patch.generationProvider });
-    }
-    if (requestedMode !== direct.mode()) {
-      await direct.updateSettings({ executionMode: requestedMode });
-    }
-    if (requestedMode === 'direct') return direct.updateSettings(patch);
+    const local = await direct.updateSettings({ ...patch, executionMode: requestedMode });
+    if (requestedMode === 'direct') return local;
     const remotePatch = { ...patch };
     delete remotePatch.executionMode;
     delete remotePatch.generationProvider;
+    delete remotePatch.themeMode;
     const remote = Object.keys(remotePatch).length
       ? await server.updateSettings(remotePatch)
       : await server.getSettings();
-    return { ...remote, executionMode: 'server' };
+    return {
+      ...remote,
+      executionMode: 'server',
+      generationProvider: local.generationProvider,
+      themeMode: local.themeMode,
+    };
   }
 
   return {
@@ -156,6 +163,7 @@ export function createApiClient({
     attempt: attemptId => selected().attempt(attemptId),
     cancel: attemptId => selected().cancel(attemptId),
     gallery: options => selected().gallery(options),
+    cleanupGallery: () => selected().cleanupGallery(),
     deleteResult: resultId => selected().deleteResult(resultId),
     fileUrl: resultId => direct.hasResult(resultId)
       ? direct.fileUrl(resultId)

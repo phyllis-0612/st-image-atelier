@@ -4,6 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs/promises');
 const { readJson, atomicWriteJson } = require('../utils/atomic-json');
 const { AppError } = require('../utils/errors');
+const { normalizeRetentionSettings } = require('./retention');
 
 function now() { return new Date().toISOString(); }
 
@@ -43,6 +44,10 @@ function defaultSettings() {
   return {
     enabled: true,
     autoGenerate: false,
+    galleryCleanupByAge: false,
+    galleryMaxAgeDays: 7,
+    galleryCleanupByCount: false,
+    galleryMaxCount: 200,
     allowHttp: false,
     maxImageBytes: 30 * 1024 * 1024,
     downloadTimeoutMs: 60_000,
@@ -119,7 +124,9 @@ class PresetService {
     return this;
   }
 
-  async getSettings() { return readJson(this.settingsFile, defaultSettings()); }
+  async getSettings() {
+    return { ...defaultSettings(), ...await readJson(this.settingsFile, defaultSettings()) };
+  }
 
   async updateSettings(patch) {
     const current = await this.getSettings();
@@ -128,6 +135,7 @@ class PresetService {
       ...(typeof patch.enabled === 'boolean' ? { enabled: patch.enabled } : {}),
       ...(typeof patch.autoGenerate === 'boolean' ? { autoGenerate: patch.autoGenerate } : {}),
       ...(typeof patch.allowHttp === 'boolean' ? { allowHttp: patch.allowHttp } : {}),
+      ...normalizeRetentionSettings({ ...current, ...patch }),
       updatedAt: now(),
     };
     await atomicWriteJson(this.settingsFile, next);

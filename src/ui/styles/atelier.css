@@ -1,9 +1,12 @@
 :root {
   --stia-bg: var(--SmartThemeBlurTintColor, #1a1b1e);
+  --stia-panel: var(--stia-bg);
   --stia-card: var(--SmartThemeBotMesBlurTintColor, #232529);
   --stia-elevated: color-mix(in srgb, var(--stia-card) 92%, white 8%);
   --stia-hover: color-mix(in srgb, var(--stia-card) 84%, white 16%);
   --stia-input: color-mix(in srgb, var(--stia-card) 88%, black 12%);
+  --stia-input-text: var(--SmartThemeBodyColor, #e4e5e8);
+  --stia-placeholder: color-mix(in srgb, var(--stia-input-text) 58%, transparent);
   --stia-border: var(--SmartThemeBorderColor, #3a3d44);
   --stia-border-subtle: color-mix(in srgb, var(--stia-border) 65%, transparent);
   --stia-text: var(--SmartThemeBodyColor, #e4e5e8);
@@ -20,6 +23,58 @@
   --stia-warning-muted: rgb(232 168 56 / 12%);
   --stia-gap: 8px;
   --stia-radius: 10px;
+}
+
+:root[data-stia-theme="light"] {
+  --stia-bg: #f7f4f6;
+  --stia-panel: #f7f4f6;
+  --stia-card: #ffffff;
+  --stia-elevated: #ffffff;
+  --stia-hover: #eee8ec;
+  --stia-input: #ffffff;
+  --stia-input-text: #261f24;
+  --stia-placeholder: #786d75;
+  --stia-border: #c9bec6;
+  --stia-border-subtle: #ded5db;
+  --stia-text: #261f24;
+  --stia-secondary: #594f56;
+  --stia-muted: #756a72;
+  --stia-accent: #8f4863;
+  --stia-accent-text: #71354c;
+  --stia-accent-muted: rgb(143 72 99 / 12%);
+  --stia-success: #287a43;
+  --stia-success-muted: rgb(40 122 67 / 10%);
+  --stia-danger: #a83f49;
+  --stia-danger-muted: rgb(168 63 73 / 10%);
+  --stia-warning: #94610e;
+  --stia-warning-muted: rgb(148 97 14 / 10%);
+}
+
+:root[data-stia-theme="dark"] {
+  --stia-bg: #15161a;
+  --stia-panel: #15161a;
+  --stia-card: #202228;
+  --stia-elevated: #292c33;
+  --stia-hover: #343741;
+  --stia-input: #111318;
+  --stia-input-text: #f4f4f6;
+  --stia-placeholder: #9a9da6;
+  --stia-border: #4d515c;
+  --stia-border-subtle: #393c45;
+  --stia-text: #f4f4f6;
+  --stia-secondary: #c1c3ca;
+  --stia-muted: #979aa4;
+  --stia-accent: #b45f80;
+  --stia-accent-text: #f0acc6;
+  --stia-accent-muted: rgb(180 95 128 / 15%);
+}
+
+:root[data-stia-theme="light"] :where(.stia-panel, .stia-card, .stia-image-viewer) {
+  color-scheme: light;
+}
+
+:root[data-stia-theme="dark"] :where(.stia-panel, .stia-card, .stia-image-viewer) {
+  color-scheme: dark;
 }
 
 @keyframes stia-pulse {
@@ -321,6 +376,18 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.stia-retention-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(120px, .8fr);
+  gap: 10px 12px;
+  align-items: end;
+}
+
+.stia-retention-grid .stia-switch-field {
+  min-height: 38px;
+  padding: 6px 0;
+}
+
 .stia-field {
   display: grid;
   gap: 4px;
@@ -343,12 +410,34 @@
   width: 100%;
   min-height: 38px;
   padding: 8px 11px;
-  color: var(--stia-text);
+  color: var(--stia-input-text);
   background: var(--stia-input);
   border: 1px solid var(--stia-border);
   border-radius: 7px;
   font: inherit;
   font-size: 13px;
+}
+
+.stia-field input::placeholder,
+.stia-field textarea::placeholder {
+  color: var(--stia-placeholder);
+  opacity: 1;
+}
+
+.stia-field input:not([type="checkbox"]),
+.stia-field textarea {
+  caret-color: var(--stia-accent);
+}
+
+.stia-field select option {
+  color: var(--stia-input-text);
+  background: var(--stia-input);
+}
+
+.stia-field input:disabled,
+.stia-field select:disabled,
+.stia-field textarea:disabled {
+  opacity: .58;
 }
 
 .stia-field textarea {
@@ -1016,7 +1105,8 @@
 
 @media (max-width: 400px) {
   .stia-form-grid,
-  .stia-form-grid--compact {
+  .stia-form-grid--compact,
+  .stia-retention-grid {
     grid-template-columns: 1fr;
   }
 

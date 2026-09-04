@@ -157,6 +157,12 @@ class MetadataStore {
       nextCursor: start + items.length < all.length ? items.at(-1)?.resultId : null,
     };
   }
+
+  availableResults() {
+    return Object.values(this.index.results)
+      .filter(result => result.status === 'available')
+      .map(result => structuredClone(result));
+  }
 }
 
 module.exports = { MetadataStore, emptyIndex };

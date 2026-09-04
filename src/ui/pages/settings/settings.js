@@ -124,6 +124,21 @@ export function createToolPanel({ api, store }) {
 
   const enabled = input('checkbox');
   const autoGenerate = input('checkbox');
+  const themeMode = select([
+    ['tavern', '跟随酒馆主题'],
+    ['light', '日间模式'],
+    ['dark', '夜间模式'],
+  ]);
+  const cleanupByAge = input('checkbox');
+  const cleanupDays = input('number');
+  cleanupDays.min = '1';
+  cleanupDays.max = '3650';
+  cleanupDays.inputMode = 'numeric';
+  const cleanupByCount = input('checkbox');
+  const cleanupCount = input('number');
+  cleanupCount.min = '1';
+  cleanupCount.max = '10000';
+  cleanupCount.inputMode = 'numeric';
   const executionMode = select([
     ['direct', '免服务端直连（推荐，一键安装）'],
     ['server', 'Server Plugin 增强模式'],
@@ -289,6 +304,26 @@ export function createToolPanel({ api, store }) {
       control.disabled = false;
     }
   }
+
+  function syncCleanupControls() {
+    cleanupDays.disabled = !cleanupByAge.checked;
+    cleanupCount.disabled = !cleanupByCount.checked;
+  }
+
+  cleanupByAge.addEventListener('change', syncCleanupControls);
+  cleanupByCount.addEventListener('change', syncCleanupControls);
+  themeMode.addEventListener('change', async () => {
+    store.set({
+      settings: { ...store.state.settings, themeMode: themeMode.value },
+    });
+    await run(themeMode, async () => {
+      const nextSettings = await api.updateSettings({ themeMode: themeMode.value });
+      store.set({ settings: nextSettings });
+      status.textContent = themeMode.value === 'tavern'
+        ? '已跟随酒馆主题'
+        : `已切换为${themeMode.value === 'light' ? '日间' : '夜间'}模式`;
+    });
+  });
 
   function updateModelList(models, selectedValue = '') {
     const values = (models || []).map(item => item.id).filter(Boolean);
@@ -873,6 +908,68 @@ export function createToolPanel({ api, store }) {
   automationSection.className = 'stia-section stia-section--compact';
   automationSection.append(autoField);
 
+  const appearanceSection = document.createElement('section');
+  appearanceSection.className = 'stia-section';
+  const appearanceTitle = document.createElement('h3');
+  appearanceTitle.innerHTML = '<span aria-hidden="true">◐</span> 界面与画廊';
+  const themeField = field('界面主题', themeMode);
+  const themeHint = document.createElement('small');
+  themeHint.className = 'stia-muted';
+  themeHint.textContent = '日间和夜间模式使用独立高对比配色；跟随模式会读取酒馆当前主题色。';
+  themeField.append(themeHint);
+
+  const cleanupHeading = document.createElement('h4');
+  cleanupHeading.className = 'stia-subheading';
+  cleanupHeading.textContent = '画廊自动清理';
+  const retentionGrid = document.createElement('div');
+  retentionGrid.className = 'stia-retention-grid';
+  const ageToggle = field('按时间自动清理', cleanupByAge);
+  ageToggle.classList.add('stia-switch-field', 'stia-switch-field--row');
+  const ageDescription = document.createElement('small');
+  ageDescription.textContent = '删除早于指定天数的图片';
+  ageToggle.querySelector('span')?.append(ageDescription);
+  const countToggle = field('按数量自动清理', cleanupByCount);
+  countToggle.classList.add('stia-switch-field', 'stia-switch-field--row');
+  const countDescription = document.createElement('small');
+  countDescription.textContent = '只保留最新的指定张数';
+  countToggle.querySelector('span')?.append(countDescription);
+  retentionGrid.append(
+    ageToggle,
+    field('保留天数', cleanupDays),
+    countToggle,
+    field('最多保留图片数', cleanupCount),
+  );
+  const cleanupNotice = document.createElement('p');
+  cleanupNotice.className = 'stia-warning';
+  cleanupNotice.textContent = '两项可单独或同时启用；同时启用时，任一规则命中的旧图片都会被永久删除。仅清理 Image Atelier 自己登记的图片，不会触碰酒馆或其他扩展的图片。';
+  const saveMaintenance = action('✓  保存规则并立即检查', async () => {
+    if ((cleanupByAge.checked || cleanupByCount.checked)
+      && !confirm('保存后会立即按规则永久删除旧图片，且无法撤销。确定继续吗？')) return;
+    await run(saveMaintenance, async () => {
+      const nextSettings = await api.updateSettings({
+        themeMode: themeMode.value,
+        galleryCleanupByAge: cleanupByAge.checked,
+        galleryMaxAgeDays: Number(cleanupDays.value) || 7,
+        galleryCleanupByCount: cleanupByCount.checked,
+        galleryMaxCount: Number(cleanupCount.value) || 200,
+      });
+      store.set({ settings: nextSettings });
+      const result = await api.cleanupGallery();
+      status.textContent = result.enabled
+        ? `清理规则已保存；本次删除 ${result.deletedCount} 张，保留 ${result.keptCount} 张${result.failedCount ? `，${result.failedCount} 张删除失败` : ''}`
+        : '画廊自动清理已关闭';
+    });
+  }, true);
+  saveMaintenance.classList.add('stia-button--full');
+  appearanceSection.append(
+    appearanceTitle,
+    themeField,
+    cleanupHeading,
+    retentionGrid,
+    cleanupNotice,
+    saveMaintenance,
+  );
+
   const warning = document.createElement('p');
   warning.className = 'stia-warning';
   warning.textContent = '直连模式下，每个预设的 Key 独立保存在当前酒馆账户中；中转站必须允许 CORS。HTTP 仅适合受信任的本地服务。';
@@ -967,6 +1064,7 @@ export function createToolPanel({ api, store }) {
     generationSection,
     novelAiSection,
     automationSection,
+    appearanceSection,
     advanced,
     status,
   );
@@ -992,6 +1090,11 @@ export function createToolPanel({ api, store }) {
         generationProvider: provider,
         executionMode: requestedMode,
         allowHttp: allowHttp.checked,
+        themeMode: themeMode.value,
+        galleryCleanupByAge: cleanupByAge.checked,
+        galleryMaxAgeDays: Number(cleanupDays.value) || 7,
+        galleryCleanupByCount: cleanupByCount.checked,
+        galleryMaxCount: Number(cleanupCount.value) || 200,
       });
       if (provider === 'openai' && previousMode !== requestedMode) {
         const presetData = await api.getPresets();
@@ -1048,6 +1151,14 @@ export function createToolPanel({ api, store }) {
       health.classList.add('is-ready');
       enabled.checked = settings.enabled;
       autoGenerate.checked = settings.autoGenerate;
+      themeMode.value = ['tavern', 'light', 'dark'].includes(settings.themeMode)
+        ? settings.themeMode
+        : 'tavern';
+      cleanupByAge.checked = settings.galleryCleanupByAge === true;
+      cleanupDays.value = String(settings.galleryMaxAgeDays || 7);
+      cleanupByCount.checked = settings.galleryCleanupByCount === true;
+      cleanupCount.value = String(settings.galleryMaxCount || 200);
+      syncCleanupControls();
       executionMode.value = provider === 'novelai'
         ? 'direct'
         : settings.executionMode || healthData.mode || 'direct';

@@ -19,6 +19,8 @@ import {
   createArtistPresetExport,
   parseArtistPresetImport,
 } from './artist-preset-transfer.js';
+import { normalizeRetentionSettings, selectCleanupCandidates } from '../gallery/retention.js';
+import { normalizeThemeMode } from '../theme/theme.js';
 
 const LEGACY_API_KEY_STORAGE = 'stImageAtelier.directApiKey.v1';
 const API_KEY_STORAGE_PREFIX = 'stImageAtelier.directApiKey.v2:';
@@ -94,15 +96,21 @@ function uniqueImportedName(name, presets) {
   return `${name}（导入 ${suffix}）`;
 }
 
+function normalizeSettings(value = {}) {
+  const merged = { ...clone(DEFAULT_SETTINGS), ...value };
+  return {
+    ...merged,
+    generationProvider: merged.generationProvider === 'novelai' ? 'novelai' : 'openai',
+    executionMode: merged.executionMode === 'server' ? 'server' : 'direct',
+    themeMode: normalizeThemeMode(merged.themeMode),
+    ...normalizeRetentionSettings(merged),
+  };
+}
+
 function ensureNamespace(extensionSettings) {
   const previous = extensionSettings[MODULE_NAME];
   const namespace = previous && typeof previous === 'object' ? previous : {};
-  namespace.settings = {
-    ...clone(DEFAULT_SETTINGS),
-    ...(namespace.settings || {}),
-    generationProvider: namespace.settings?.generationProvider === 'novelai' ? 'novelai' : 'openai',
-    executionMode: namespace.settings?.executionMode || 'direct',
-  };
+  namespace.settings = normalizeSettings(namespace.settings);
   const sourcePresets = Array.isArray(namespace.presets) && namespace.presets.length
     ? namespace.presets
     : [namespace.preset || DEFAULT_PRESET];
@@ -171,6 +179,7 @@ export function createDirectApiClient({
   const controllers = new Map();
   const resultIndex = new Map(namespace.gallery.map(result => [result.resultId, result]));
   const memoryKeys = new Map();
+  let cleanupPromise = null;
 
   function presetById(presetId = namespace.activePresetId) {
     return namespace.presets.find(item => item.id === presetId) || null;
@@ -622,6 +631,82 @@ export function createDirectApiClient({
     return { resultId, status: 'deleted' };
   }
 
+  async function performGalleryCleanup() {
+    const selection = selectCleanupCandidates(namespace.gallery, namespace.settings);
+    if (!selection.settings.galleryCleanupByAge && !selection.settings.galleryCleanupByCount) {
+      return {
+        enabled: false,
+        candidateCount: 0,
+        deletedCount: 0,
+        failedCount: 0,
+        keptCount: selection.availableCount,
+        byAgeCount: 0,
+        byCountCount: 0,
+        deletedResultIds: [],
+      };
+    }
+
+    const deletedResultIds = [];
+    const affectedTags = new Set();
+    for (const result of selection.candidates) {
+      try {
+        await removeFile(result);
+      } catch (error) {
+        console.warn('[Image Atelier] 自动清理图片失败', result.resultId, error);
+        continue;
+      }
+      result.status = 'deleted';
+      result.deletedAt = now();
+      if (!namespace.deletedResultIds.includes(result.resultId)) {
+        namespace.deletedResultIds.push(result.resultId);
+      }
+      deletedResultIds.push(result.resultId);
+      affectedTags.add(result.tagId);
+    }
+
+    let chatChanged = false;
+    const deleted = new Set(deletedResultIds);
+    for (const tagId of affectedTags) {
+      const found = findTag(tagId);
+      if (!found) continue;
+      for (const messageResult of found.tag.results || []) {
+        if (!deleted.has(messageResult.resultId)) continue;
+        const galleryResult = namespace.gallery
+          .find(item => item.resultId === messageResult.resultId);
+        Object.assign(messageResult, {
+          status: 'deleted',
+          deletedAt: galleryResult?.deletedAt || now(),
+        });
+      }
+      found.tag.resultIds = (found.tag.resultIds || [])
+        .filter(resultId => !deleted.has(resultId));
+      found.tag.latestResultId = found.tag.resultIds.at(-1) || null;
+      found.tag.autoSuppressed = true;
+      chatChanged = true;
+    }
+    if (chatChanged) await compat.save();
+    if (deletedResultIds.length) await savePreferences();
+
+    return {
+      enabled: true,
+      candidateCount: selection.candidates.length,
+      deletedCount: deletedResultIds.length,
+      failedCount: selection.candidates.length - deletedResultIds.length,
+      keptCount: selection.availableCount - deletedResultIds.length,
+      byAgeCount: selection.byAgeCount,
+      byCountCount: selection.byCountCount,
+      deletedResultIds,
+    };
+  }
+
+  function cleanupGallery() {
+    if (cleanupPromise) return cleanupPromise;
+    cleanupPromise = performGalleryCleanup().finally(() => {
+      cleanupPromise = null;
+    });
+    return cleanupPromise;
+  }
+
   function fileUrl(resultId) {
     const result = resultIndex.get(resultId)
       || namespace.gallery.find(item => item.resultId === resultId);
@@ -632,13 +717,18 @@ export function createDirectApiClient({
     mode: () => namespace.settings.executionMode || 'direct',
     health: async () => ({
       mode: 'direct',
-      version: '1.4.4',
+      version: '1.5.0',
       corsRequired: true,
       storage: 'sillytavern-images',
     }),
     getSettings: async () => clone(namespace.settings),
     updateSettings: async patch => {
-      Object.assign(namespace.settings, patch, { updatedAt: now(), schemaVersion: SCHEMA_VERSION });
+      namespace.settings = normalizeSettings({
+        ...namespace.settings,
+        ...patch,
+        updatedAt: now(),
+        schemaVersion: SCHEMA_VERSION,
+      });
       await savePreferences();
       return clone(namespace.settings);
     },
@@ -879,6 +969,7 @@ export function createDirectApiClient({
     },
     cancel,
     gallery,
+    cleanupGallery,
     deleteResult,
     fileUrl,
     downloadUrl: fileUrl,
