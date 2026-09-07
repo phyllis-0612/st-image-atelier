@@ -45,6 +45,8 @@ function defaultSettings() {
   return {
     enabled: true,
     autoGenerate: false,
+    enablePromptOverrideRegenerate: false,
+    enableSmartRetry: false,
     galleryCleanupByAge: false,
     galleryMaxAgeDays: 7,
     galleryCleanupByCount: false,
@@ -139,6 +141,10 @@ class PresetService {
       ...current,
       ...(typeof patch.enabled === 'boolean' ? { enabled: patch.enabled } : {}),
       ...(typeof patch.autoGenerate === 'boolean' ? { autoGenerate: patch.autoGenerate } : {}),
+      ...(typeof patch.enablePromptOverrideRegenerate === 'boolean'
+        ? { enablePromptOverrideRegenerate: patch.enablePromptOverrideRegenerate } : {}),
+      ...(typeof patch.enableSmartRetry === 'boolean'
+        ? { enableSmartRetry: patch.enableSmartRetry } : {}),
       ...(typeof patch.allowHttp === 'boolean' ? { allowHttp: patch.allowHttp } : {}),
       ...normalizeRetentionSettings({ ...current, ...patch }),
       updatedAt: now(),

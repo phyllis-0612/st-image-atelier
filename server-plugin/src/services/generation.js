@@ -72,6 +72,7 @@ class GenerationService {
       presetId: 'default',
       presetNameSnapshot: preset.name,
       model: preset.selectedModel,
+      promptSnapshot: prompt,
       parameters,
       status: 'queued',
       resultIds: [],
@@ -95,7 +96,6 @@ class GenerationService {
       updatedAt: timestamp(),
       schemaVersion: 1,
     };
-    tag.prompt = prompt;
     if (requestMode === 'auto') tag.autoAttempted = true;
     await this.metadata.putTag(tag);
     await this.metadata.putAttempt(attempt);
@@ -112,8 +112,19 @@ class GenerationService {
       attempt.status = 'generating';
       await this.metadata.putAttempt(attempt);
       const sources = await adapter.generate({
-        preset, apiKey, settings, prompt, parameters, signal: controller.signal,
+        preset,
+        apiKey,
+        settings,
+        prompt,
+        parameters,
+        signal: controller.signal,
+        onCompatibilityRetry: async retry => {
+          attempt.compatibilityRetry = retry;
+          attempt.statusMessage = retry.message;
+          await this.metadata.putAttempt(attempt);
+        },
       });
+      attempt.statusMessage = null;
       for (const source of sources) {
         if (controller.signal.aborted) throw new AppError('ATTEMPT_INTERRUPTED', '用户已取消');
         attempt.status = source.sourceType === 'url' ? 'downloading' : 'saving';
@@ -130,6 +141,9 @@ class GenerationService {
           chatId: tag.chatId,
           messageUuid: tag.messageUuid,
           prompt,
+          promptSnapshot: prompt,
+          resolvedPrompt: prompt,
+          provider: 'openai',
           presetId: 'default',
           presetNameSnapshot: preset.name,
           apiModel: preset.selectedModel,
@@ -138,6 +152,8 @@ class GenerationService {
           status: 'available',
           createdAt: timestamp(),
           deletedAt: null,
+          favorite: false,
+          compatibilityRetry: attempt.compatibilityRetry || null,
           schemaVersion: 1,
         };
         await this.metadata.putResult(result);
@@ -166,7 +182,12 @@ class GenerationService {
       const exposed = publicError(error);
       attempt.status = cancelled ? 'cancelled' : 'failed';
       attempt.errorCode = cancelled ? null : exposed.code;
-      attempt.errorMessage = cancelled ? '已取消' : exposed.message;
+      attempt.errorMessage = cancelled
+        ? '已取消'
+        : `${exposed.message}${exposed.details ? `：${exposed.details}` : ''}`;
+      if (!cancelled && attempt.compatibilityRetry) {
+        attempt.errorMessage += `；已尝试移除 ${attempt.compatibilityRetry.adjustedParameters.join('、')} 后重试一次`;
+      }
       attempt.completedAt = timestamp();
       await this.metadata.transaction(index => {
         index.attempts[attempt.attemptId] = attempt;

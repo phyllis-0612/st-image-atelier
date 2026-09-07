@@ -82,6 +82,85 @@ test('Base64 与多图返回都会保存', async t => {
   assert.equal((await waitForAttempt(f.metadata, multiInput.attemptId)).resultIds.length, 2);
 });
 
+test('服务器模式临时提示词只改本次请求与结果快照，不改原标签', async t => {
+  const f = await fixture(t);
+  const first = request('original prompt');
+  await f.generation.generate(first);
+  await waitForAttempt(f.metadata, first.attemptId);
+  const originalTagPrompt = f.metadata.getTag(first.tagId).prompt;
+
+  const redraw = request('temporary changed prompt', { tagId: first.tagId });
+  await f.generation.generate(redraw);
+  const attempt = await waitForAttempt(f.metadata, redraw.attemptId);
+  assert.equal(attempt.status, 'succeeded');
+  assert.equal(f.upstream.state.generationBodies.at(-1).prompt, 'temporary changed prompt');
+  assert.equal(f.metadata.getTag(first.tagId).prompt, originalTagPrompt);
+  assert.equal(f.metadata.getResult(attempt.resultIds[0]).promptSnapshot, 'temporary changed prompt');
+});
+
+test('服务器模式收藏状态持久化，并保护收藏图片不被自动清理', async t => {
+  const f = await fixture(t);
+  const generated = [];
+  for (let index = 0; index < 3; index += 1) {
+    const input = request('base64');
+    await f.generation.generate(input);
+    const attempt = await waitForAttempt(f.metadata, input.attemptId);
+    generated.push(attempt.resultIds[0]);
+  }
+  await f.metadata.transaction(index => {
+    generated.forEach((resultId, position) => {
+      index.results[resultId].createdAt = new Date(Date.now() - (10 - position) * 86_400_000).toISOString();
+    });
+  });
+  await f.gallery.setFavorite(generated[0], true);
+  assert.equal(f.metadata.getResult(generated[0]).favorite, true);
+  assert.equal(f.gallery.metadataList().items.length, 3);
+  await f.preset.updateSettings({ galleryCleanupByCount: true, galleryMaxCount: 1 });
+  const cleanup = await f.gallery.cleanup(await f.preset.getSettings());
+  assert.equal(cleanup.deletedCount, 2);
+  assert.equal(f.metadata.getResult(generated[0]).status, 'available');
+  assert.equal(f.metadata.getResult(generated[0]).favorite, true);
+  const reloaded = await new MetadataStore(f.root).initialize();
+  assert.equal(reloaded.getResult(generated[0]).favorite, true);
+});
+
+test('服务器智能重试只回退一次并记录元数据；关闭时不额外请求', async t => {
+  const f = await fixture(t);
+  await f.preset.updateSettings({ enableSmartRetry: true });
+  const autoTagId = crypto.randomUUID();
+  const successInput = request('reject-size', {
+    tagId: autoTagId,
+    attemptId: `auto:${autoTagId}`,
+    requestMode: 'auto',
+  });
+  const beforeSuccess = f.upstream.state.generationCalls;
+  await f.generation.generate(successInput);
+  const successAttempt = await waitForAttempt(f.metadata, successInput.attemptId);
+  assert.equal(successAttempt.status, 'succeeded');
+  assert.equal(f.upstream.state.generationCalls - beforeSuccess, 2);
+  assert.deepEqual(successAttempt.compatibilityRetry.adjustedParameters, ['size']);
+  assert.equal('size' in f.upstream.state.generationBodies.at(-1), false);
+  assert.deepEqual(
+    f.metadata.getResult(successAttempt.resultIds[0]).compatibilityRetry.adjustedParameters,
+    ['size'],
+  );
+
+  const failInput = request('reject-size-twice');
+  const beforeFail = f.upstream.state.generationCalls;
+  await f.generation.generate(failInput);
+  const failed = await waitForAttempt(f.metadata, failInput.attemptId);
+  assert.equal(failed.status, 'failed');
+  assert.equal(f.upstream.state.generationCalls - beforeFail, 2);
+  assert.match(failed.errorMessage, /已尝试移除 size 后重试一次/);
+
+  await f.preset.updateSettings({ enableSmartRetry: false });
+  const offInput = request('reject-size');
+  const beforeOff = f.upstream.state.generationCalls;
+  await f.generation.generate(offInput);
+  assert.equal((await waitForAttempt(f.metadata, offInput.attemptId)).status, 'failed');
+  assert.equal(f.upstream.state.generationCalls - beforeOff, 1);
+});
+
 test('重复 attemptId 服务端幂等且只调用一次上游', async t => {
   const f = await fixture(t);
   const input = request('base64');
@@ -121,6 +200,21 @@ test('模型拉取成功、失败保留旧缓存', async t => {
     adapter.listModels({ preset, apiKey: 'wrong', settings }),
     error => error.code === 'UPSTREAM_AUTH_FAILED',
   );
+});
+
+test('服务器模式持久化两个新开关，旧设置默认关闭', async t => {
+  const f = await fixture(t);
+  let settings = await f.preset.getSettings();
+  assert.equal(settings.enablePromptOverrideRegenerate, false);
+  assert.equal(settings.enableSmartRetry, false);
+  await f.preset.updateSettings({
+    enablePromptOverrideRegenerate: true,
+    enableSmartRetry: true,
+  });
+  const reloaded = await new PresetService(f.root).initialize();
+  settings = await reloaded.getSettings();
+  assert.equal(settings.enablePromptOverrideRegenerate, true);
+  assert.equal(settings.enableSmartRetry, true);
 });
 
 test('上游超时映射为可重试中文错误', async t => {
@@ -176,6 +270,8 @@ test('metadata 丢失时可从 images 目录重建画廊索引', async t => {
   const store = await new MetadataStore(root).initialize();
   assert.equal(store.getResult(resultId).status, 'available');
   assert.equal(store.getResult(resultId).recovered, true);
+  assert.equal(store.getResult(resultId).favorite, false);
+  assert.equal(store.getResult(resultId).promptSnapshot, '从本地图片目录恢复的记录');
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 }));
 });
 

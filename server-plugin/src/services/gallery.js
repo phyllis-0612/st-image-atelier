@@ -15,6 +15,11 @@ class GalleryService {
     return this.metadata.listResults(query);
   }
 
+  metadataList() {
+    const items = this.metadata.allAvailableResults();
+    return { items, total: items.length };
+  }
+
   get(resultId) {
     const result = this.metadata.getResult(resultId);
     if (!result || result.status !== 'available' || !result.localRelativePath) {
@@ -53,6 +58,14 @@ class GalleryService {
         tag.latestResultId = available[0]?.resultId || null;
         tag.updatedAt = now;
       }
+    });
+    return this.metadata.getResult(resultId);
+  }
+
+  async setFavorite(resultId, favorite) {
+    this.get(resultId);
+    await this.metadata.transaction(index => {
+      index.results[resultId].favorite = favorite === true;
     });
     return this.metadata.getResult(resultId);
   }

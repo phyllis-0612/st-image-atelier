@@ -6,7 +6,7 @@ const { readJson, atomicWriteJson } = require('../utils/atomic-json');
 
 function emptyIndex() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     tags: {},
     attempts: {},
     results: {},
@@ -36,11 +36,33 @@ class MetadataStore {
         this.index = emptyIndex();
       }
     }
+    this.index.tags ||= {};
+    this.index.attempts ||= {};
+    this.index.results ||= {};
     if (!Object.keys(this.index.results || {}).length) {
       const recovered = await this.rebuildFromImages();
       if (recovered > 0) await this.persist();
     }
     let changed = false;
+    for (const result of Object.values(this.index.results)) {
+      const promptSnapshot = String(result.promptSnapshot || result.prompt || result.resolvedPrompt || '');
+      if (result.promptSnapshot !== promptSnapshot) {
+        result.promptSnapshot = promptSnapshot;
+        changed = true;
+      }
+      if (typeof result.favorite !== 'boolean') {
+        result.favorite = false;
+        changed = true;
+      }
+      if (!result.provider) {
+        result.provider = result.presetId === 'novelai' || result.artistPresetId ? 'novelai' : 'openai';
+        changed = true;
+      }
+    }
+    if (this.index.schemaVersion !== 2) {
+      this.index.schemaVersion = 2;
+      changed = true;
+    }
     for (const attempt of Object.values(this.index.attempts)) {
       if (['queued', 'generating', 'downloading', 'saving'].includes(attempt.status)) {
         attempt.status = 'interrupted';
@@ -87,6 +109,7 @@ class MetadataStore {
         chatId: '',
         messageUuid: '',
         prompt: '从本地图片目录恢复的记录',
+        promptSnapshot: '从本地图片目录恢复的记录',
         presetId: 'default',
         presetNameSnapshot: '恢复记录',
         apiModel: 'unknown',
@@ -97,6 +120,8 @@ class MetadataStore {
         status: 'available',
         createdAt: stat.birthtime.toISOString(),
         deletedAt: null,
+        favorite: false,
+        provider: 'openai',
         recovered: true,
         schemaVersion: 1,
       };
@@ -161,6 +186,13 @@ class MetadataStore {
   availableResults() {
     return Object.values(this.index.results)
       .filter(result => result.status === 'available')
+      .map(result => structuredClone(result));
+  }
+
+  allAvailableResults() {
+    return Object.values(this.index.results)
+      .filter(result => result.status === 'available')
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
       .map(result => structuredClone(result));
   }
 }

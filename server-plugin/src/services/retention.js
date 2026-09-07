@@ -27,17 +27,19 @@ function selectCleanupCandidates(results, value = {}, currentTime = Date.now()) 
     .filter(result => result?.status === 'available')
     .sort((left, right) => createdTime(left) - createdTime(right)
       || String(left.resultId || '').localeCompare(String(right.resultId || '')));
+  const removable = available.filter(result => result.favorite !== true);
   const byAge = settings.galleryCleanupByAge
-    ? available.filter(result => createdTime(result) < currentTime - settings.galleryMaxAgeDays * DAY_MS)
+    ? removable.filter(result => createdTime(result) < currentTime - settings.galleryMaxAgeDays * DAY_MS)
     : [];
   const overflow = settings.galleryCleanupByCount
     ? Math.max(0, available.length - settings.galleryMaxCount)
     : 0;
-  const byCount = available.slice(0, overflow);
+  const byCount = removable.slice(0, overflow);
   const selected = new Set([...byAge, ...byCount].map(result => result.resultId));
   return {
     settings,
     availableCount: available.length,
+    protectedFavoriteCount: available.length - removable.length,
     byAgeCount: byAge.length,
     byCountCount: byCount.length,
     candidates: available.filter(result => selected.has(result.resultId)),

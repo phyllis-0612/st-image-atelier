@@ -107,6 +107,21 @@ function normalizeSettings(value = {}) {
   };
 }
 
+export function normalizeGalleryResult(value = {}) {
+  const promptSnapshot = String(value.promptSnapshot || value.prompt || value.resolvedPrompt || '');
+  const provider = value.provider === 'novelai'
+    || value.presetId === 'novelai'
+    || value.artistPresetId
+    ? 'novelai'
+    : 'openai';
+  return {
+    ...value,
+    promptSnapshot,
+    favorite: value.favorite === true,
+    provider,
+  };
+}
+
 function ensureNamespace(extensionSettings) {
   const previous = extensionSettings[MODULE_NAME];
   const namespace = previous && typeof previous === 'object' ? previous : {};
@@ -140,7 +155,9 @@ function ensureNamespace(extensionSettings) {
     .some(item => item.id === namespace.activeArtistPresetId)
     ? namespace.activeArtistPresetId
     : namespace.artistPresets[0].id;
-  namespace.gallery = Array.isArray(namespace.gallery) ? namespace.gallery : [];
+  namespace.gallery = Array.isArray(namespace.gallery)
+    ? namespace.gallery.map(normalizeGalleryResult)
+    : [];
   namespace.deletedResultIds = Array.isArray(namespace.deletedResultIds)
     ? namespace.deletedResultIds
     : [];
@@ -277,7 +294,9 @@ export function createDirectApiClient({
     if (!found) return { tagId, tag: null, attempts: [], results: [] };
     const deleted = new Set(namespace.deletedResultIds);
     const results = (found.tag.results || []).map(result => {
-      const next = deleted.has(result.resultId) ? { ...result, status: 'deleted' } : result;
+      const normalized = normalizeGalleryResult(result);
+      Object.assign(result, normalized);
+      const next = deleted.has(result.resultId) ? { ...normalized, status: 'deleted' } : normalized;
       resultIndex.set(next.resultId, next);
       return next;
     });
@@ -392,13 +411,17 @@ export function createDirectApiClient({
       chatId: input.chatId,
       messageUuid: input.messageUuid,
       prompt: input.prompt,
+      promptSnapshot: attempt.promptSnapshot || input.prompt,
       resolvedPrompt: attempt.resolvedPrompt || input.prompt,
+      negativePromptSnapshot: attempt.negativePromptSnapshot || '',
       resolvedNegativePrompt: attempt.resolvedNegativePrompt || '',
       provider: attempt.provider || 'openai',
       presetId: attempt.presetId,
       presetNameSnapshot: attempt.presetNameSnapshot,
       artistPresetId: attempt.artistPresetId || null,
       artistPresetNameSnapshot: attempt.artistPresetNameSnapshot || null,
+      artistPromptSnapshot: attempt.artistPromptSnapshot || '',
+      artistNegativePromptSnapshot: attempt.artistNegativePromptSnapshot || '',
       generationSeed: attempt.generationSeed ?? null,
       apiModel: attempt.model,
       localRelativePath: uploaded.path,
@@ -409,6 +432,8 @@ export function createDirectApiClient({
       storageMode: 'direct',
       createdAt: now(),
       deletedAt: null,
+      favorite: false,
+      compatibilityRetry: attempt.compatibilityRetry || null,
       schemaVersion: SCHEMA_VERSION,
     };
   }
@@ -495,6 +520,14 @@ export function createDirectApiClient({
       artistPresetId: artistPreset?.id || null,
       artistPresetNameSnapshot: artistPreset?.name || null,
       model: provider === 'novelai' ? novelAi.model : preset.selectedModel,
+      promptSnapshot: input.prompt,
+      negativePromptSnapshot: provider === 'novelai'
+        ? (Object.hasOwn(input, 'negativePromptOverride')
+          ? String(input.negativePromptOverride || '')
+          : String(novelAi.negativePrompt || ''))
+        : '',
+      artistPromptSnapshot: artistPreset?.prompt || '',
+      artistNegativePromptSnapshot: artistPreset?.negativePrompt || '',
       parameters: { ...clone(input.parameters || {}), size: requestedSize },
       status: 'generating',
       resultIds: [],
@@ -519,7 +552,7 @@ export function createDirectApiClient({
       let sources;
       if (provider === 'novelai') {
         const generated = await generateNovelAiImages({
-          config: novelAi,
+          config: { ...novelAi, negativePrompt: attempt.negativePromptSnapshot },
           apiKey,
           artistPrompt: artistPreset.prompt,
           artistNegativePrompt: artistPreset.negativePrompt,
@@ -540,10 +573,17 @@ export function createDirectApiClient({
           parameters: attempt.parameters,
           settings: namespace.settings,
           signal: controller.signal,
+          onCompatibilityRetry: async retry => {
+            attempt.compatibilityRetry = retry;
+            attempt.statusMessage = retry.message;
+            found = await persistAttempt(found, attempt);
+            input.onProgress?.(clone(attempt));
+          },
         });
       }
 
       attempt.status = 'downloading';
+      attempt.statusMessage = null;
       found = await persistAttempt(found, attempt);
       for (const source of sources) {
         if (controller.signal.aborted) throw controller.signal.reason || new Error('cancelled');
@@ -573,6 +613,9 @@ export function createDirectApiClient({
       attempt.status = cancelled ? 'cancelled' : 'failed';
       attempt.errorCode = cancelled ? null : (error.code || 'UPSTREAM_HTTP_ERROR');
       attempt.errorMessage = cancelled ? '已取消' : (error.message || '生成失败');
+      if (!cancelled && attempt.compatibilityRetry) {
+        attempt.errorMessage += `；已尝试移除 ${attempt.compatibilityRetry.adjustedParameters.join('、')} 后重试一次`;
+      }
       attempt.completedAt = now();
       await persistAttempt(found, attempt).catch(() => {});
       if (cancelled) return clone(attempt);
@@ -612,13 +655,48 @@ export function createDirectApiClient({
     };
   }
 
+  async function galleryMetadata() {
+    const items = namespace.gallery
+      .filter(result => result.status === 'available'
+        && !namespace.deletedResultIds.includes(result.resultId))
+      .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+    items.forEach(result => {
+      Object.assign(result, normalizeGalleryResult(result));
+      resultIndex.set(result.resultId, result);
+    });
+    return { items: clone(items), total: items.length };
+  }
+
+  async function setFavorite(resultId, favorite) {
+    const galleryResult = namespace.gallery.find(item => item.resultId === resultId);
+    const indexedResult = resultIndex.get(resultId);
+    const result = galleryResult || indexedResult;
+    if (!result || result.status !== 'available') {
+      throw new DirectError('VALIDATION_FAILED', '找不到图片');
+    }
+    result.favorite = favorite === true;
+    if (indexedResult && indexedResult !== result) indexedResult.favorite = result.favorite;
+    resultIndex.set(resultId, result);
+    const found = findTag(result.tagId);
+    const messageResult = found?.tag?.results?.find(item => item.resultId === resultId);
+    if (messageResult) messageResult.favorite = result.favorite;
+    if (found) await compat.save();
+    await savePreferences();
+    return clone(normalizeGalleryResult(result));
+  }
+
   async function deleteResult(resultId) {
-    const result = resultIndex.get(resultId)
-      || namespace.gallery.find(item => item.resultId === resultId);
+    const galleryResult = namespace.gallery.find(item => item.resultId === resultId);
+    const indexedResult = resultIndex.get(resultId);
+    const result = galleryResult || indexedResult;
     if (!result) throw new DirectError('VALIDATION_FAILED', '找不到图片');
     await removeFile(result);
     result.status = 'deleted';
     result.deletedAt = now();
+    if (indexedResult && indexedResult !== result) {
+      indexedResult.status = 'deleted';
+      indexedResult.deletedAt = result.deletedAt;
+    }
     if (!namespace.deletedResultIds.includes(resultId)) namespace.deletedResultIds.push(resultId);
     const found = findTag(result.tagId);
     if (found) {
@@ -719,7 +797,7 @@ export function createDirectApiClient({
     mode: () => namespace.settings.executionMode || 'direct',
     health: async () => ({
       mode: 'direct',
-      version: '1.5.0',
+      version: '1.6.0',
       corsRequired: true,
       storage: 'sillytavern-images',
     }),
@@ -971,8 +1049,10 @@ export function createDirectApiClient({
     },
     cancel,
     gallery,
+    galleryMetadata,
     cleanupGallery,
     deleteResult,
+    setFavorite,
     fileUrl,
     downloadUrl: fileUrl,
     hasResult: resultId => resultIndex.has(resultId)

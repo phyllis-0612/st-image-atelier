@@ -70,8 +70,13 @@ export function createServerApiClient(compat) {
       if (cursor) query.set('cursor', cursor);
       return request(`/gallery?${query}`);
     },
+    galleryMetadata: () => request('/gallery-metadata'),
     cleanupGallery: () => request('/gallery/cleanup', { method: 'POST', body: '{}' }),
     deleteResult: resultId => request(`/gallery/${encodeURIComponent(resultId)}`, { method: 'DELETE' }),
+    setFavorite: (resultId, favorite) => request(`/gallery/${encodeURIComponent(resultId)}`, {
+      method: 'PATCH',
+      body: json({ favorite }),
+    }),
     fileUrl: resultId => `${API_ROOT}/gallery/${encodeURIComponent(resultId)}/file`,
     downloadUrl: resultId => `${API_ROOT}/gallery/${encodeURIComponent(resultId)}/download`,
   };
@@ -163,8 +168,10 @@ export function createApiClient({
     attempt: attemptId => selected().attempt(attemptId),
     cancel: attemptId => selected().cancel(attemptId),
     gallery: options => selected().gallery(options),
+    galleryMetadata: () => selected().galleryMetadata(),
     cleanupGallery: () => selected().cleanupGallery(),
     deleteResult: resultId => selected().deleteResult(resultId),
+    setFavorite: (resultId, favorite) => selected().setFavorite(resultId, favorite),
     fileUrl: resultId => direct.hasResult(resultId)
       ? direct.fileUrl(resultId)
       : server.fileUrl(resultId),

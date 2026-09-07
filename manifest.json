@@ -6,8 +6,8 @@
   "js": "index.js",
   "css": "style.css",
   "author": "phyllis-0612 · fork patched by Claude Opus 5",
-  "version": "1.5.5",
-  "homePage": "https://github.com/upcjiangxiaoyi-art/image",
-  "auto_update": false,
+  "version": "1.6.0",
+  "homePage": "https://github.com/phyllis-0612/st-image-atelier",
+  "auto_update": true,
   "minimum_client_version": "1.14.0"
 }

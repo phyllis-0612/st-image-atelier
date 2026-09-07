@@ -128,6 +128,8 @@ export function createToolPanel({ api, store }) {
 
   const enabled = input('checkbox');
   const autoGenerate = input('checkbox');
+  const enablePromptOverrideRegenerate = input('checkbox');
+  const enableSmartRetry = input('checkbox');
   const themeMode = select([
     ['tavern', '跟随酒馆主题'],
     ['light', '日间模式'],
@@ -932,7 +934,17 @@ export function createToolPanel({ api, store }) {
 
   const automationSection = document.createElement('section');
   automationSection.className = 'stia-section stia-section--compact';
-  automationSection.append(autoField);
+  const promptOverrideField = field('允许临时修改提示词后重绘', enablePromptOverrideRegenerate);
+  promptOverrideField.classList.add('stia-switch-field', 'stia-switch-field--row');
+  const promptOverrideDescription = document.createElement('small');
+  promptOverrideDescription.textContent = '在卡片上显示“调整后重绘”；只影响下一次生成，不改聊天正文';
+  promptOverrideField.querySelector('span')?.append(promptOverrideDescription);
+  const smartRetryField = field('生成失败后智能重试', enableSmartRetry);
+  smartRetryField.classList.add('stia-switch-field', 'stia-switch-field--row');
+  const smartRetryDescription = document.createElement('small');
+  smartRetryDescription.textContent = '仅在上游明确拒绝可选参数时自动回退一次；不会重试审核、限流、网络或 5xx 错误';
+  smartRetryField.querySelector('span')?.append(smartRetryDescription);
+  automationSection.append(autoField, promptOverrideField, smartRetryField);
 
   const appearanceSection = document.createElement('section');
   appearanceSection.className = 'stia-section';
@@ -1111,6 +1123,8 @@ export function createToolPanel({ api, store }) {
       const nextSettings = await api.updateSettings({
         enabled: enabled.checked,
         autoGenerate: autoGenerate.checked,
+        enablePromptOverrideRegenerate: enablePromptOverrideRegenerate.checked,
+        enableSmartRetry: enableSmartRetry.checked,
         generationProvider: provider,
         executionMode: requestedMode,
         allowHttp: allowHttp.checked,
@@ -1175,6 +1189,8 @@ export function createToolPanel({ api, store }) {
       health.classList.add('is-ready');
       enabled.checked = settings.enabled;
       autoGenerate.checked = settings.autoGenerate;
+      enablePromptOverrideRegenerate.checked = settings.enablePromptOverrideRegenerate === true;
+      enableSmartRetry.checked = settings.enableSmartRetry === true;
       themeMode.value = ['tavern', 'light', 'dark'].includes(settings.themeMode)
         ? settings.themeMode
         : 'tavern';

@@ -1,7 +1,7 @@
 export const MODULE_NAME = 'stImageAtelier';
 export const DISPLAY_NAME = 'Image Atelier';
 export const API_ROOT = '/api/plugins/st-image-atelier';
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const ATTEMPT_STATUS = Object.freeze({
   IDLE: 'idle',
@@ -43,6 +43,8 @@ export const ERROR_CODES = Object.freeze({
 export const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
   autoGenerate: false,
+  enablePromptOverrideRegenerate: false,
+  enableSmartRetry: false,
   generationProvider: 'openai',
   executionMode: 'direct',
   themeMode: 'tavern',

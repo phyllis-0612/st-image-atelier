@@ -17,6 +17,7 @@ import { createToolPanel } from './src/ui/pages/settings/settings.js';
 import { installToolMenuEntry } from './src/ui/menu/tool-menu.js';
 import { applyThemeMode } from './src/ui/theme/theme.js';
 import { removeDrawTagFromMessage } from './src/ui/state/tag-removal.js';
+import { createPromptOverrideDialog } from './src/ui/pages/prompt-override/prompt-override.js';
 
 const compat = createStCompat({
   getContext,
@@ -74,11 +75,12 @@ async function refreshTag(tagId) {
   return resolved;
 }
 
-async function generate(tag, mode) {
+async function generate(tag, mode, overrides = {}) {
   if (activeTags.has(tag.tagId)) return;
   activeTags.add(tag.tagId);
   const attemptId = mode === 'auto' ? `auto:${tag.tagId}` : uuid();
   const provider = store.state.settings.generationProvider || 'openai';
+  const prompt = Object.hasOwn(overrides, 'prompt') ? String(overrides.prompt || '') : tag.prompt;
   const optimisticAttempt = {
     attemptId,
     tagId: tag.tagId,
@@ -88,6 +90,7 @@ async function generate(tag, mode) {
       ? (store.state.novelAi?.model || '')
       : (store.state.preset?.selectedModel || ''),
     status: 'generating',
+    promptSnapshot: prompt,
     createdAt: new Date().toISOString(),
   };
   const current = store.state.tagStates.get(tag.tagId) || { tagId: tag.tagId, attempts: [], results: [] };
@@ -100,7 +103,9 @@ async function generate(tag, mode) {
       provider,
       presetId: store.state.preset?.id || 'default',
       artistPresetId: store.state.artistPreset?.id || 'default',
-      prompt: tag.prompt,
+      prompt,
+      ...(Object.hasOwn(overrides, 'negativePromptOverride')
+        ? { negativePromptOverride: overrides.negativePromptOverride } : {}),
       chatId: tag.chatId || compat.currentChatId(),
       messageUuid: tag.messageUuid,
       tagOrdinal: tag.ordinal,
@@ -108,6 +113,16 @@ async function generate(tag, mode) {
         ratio: tag.ratio,
         quality: tag.quality,
         count: tag.count,
+      },
+      onProgress: progressAttempt => {
+        const latest = store.state.tagStates.get(tag.tagId) || current;
+        store.setTag(tag.tagId, {
+          ...latest,
+          attempts: [
+            progressAttempt,
+            ...(latest.attempts || []).filter(item => item.attemptId !== progressAttempt.attemptId),
+          ],
+        });
       },
     });
     if (['succeeded', 'failed', 'interrupted', 'cancelled'].includes(attempt.status)) {
@@ -142,8 +157,24 @@ async function generate(tag, mode) {
 
 const autoQueue = createAutoQueue(generate);
 let panel;
+let promptOverrideDialog;
 const actions = {
   generate,
+  adjustRegenerate: async (tag, context = {}) => {
+    const provider = store.state.settings.generationProvider || 'openai';
+    const value = await promptOverrideDialog.open({
+      prompt: context.prompt || tag.prompt,
+      negativePrompt: provider === 'novelai'
+        ? (context.negativePrompt || store.state.novelAi?.negativePrompt || '')
+        : '',
+      provider,
+    });
+    if (!value) return null;
+    return generate(tag, 'manual', {
+      prompt: value.prompt,
+      ...(provider === 'novelai' ? { negativePromptOverride: value.negativePrompt } : {}),
+    });
+  },
   cancel: async attemptId => {
     await api.cancel(attemptId);
     const entry = [...store.state.tagStates.values()]
@@ -196,6 +227,7 @@ function installToolButton() {
 
 function initialize() {
   panel = createToolPanel({ api, store });
+  promptOverrideDialog = createPromptOverrideDialog();
   installToolButton();
   events.bind();
   void events.hydrate();

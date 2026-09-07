@@ -3,7 +3,7 @@ import http from 'node:http';
 export const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 export async function startMockUpstream() {
-  const state = { generationCalls: 0, modelCalls: 0 };
+  const state = { generationCalls: 0, generationBodies: [], modelCalls: 0 };
   const server = http.createServer(async (request, response) => {
     const send = (status, body, headers = {}) => {
       response.writeHead(status, { 'Content-Type': 'application/json', ...headers });
@@ -25,10 +25,17 @@ export async function startMockUpstream() {
       let raw = '';
       for await (const chunk of request) raw += chunk;
       const body = JSON.parse(raw);
+      state.generationBodies.push(body);
       if (body.prompt === '401') return send(401, { error: 'bad key' });
       if (body.prompt === '429') return send(429, { error: 'limited' });
       if (body.prompt === '500') return send(500, { error: 'boom' });
       if (body.prompt === 'bad-json') return send(200, 'not-json');
+      if (body.prompt === 'reject-size' && 'size' in body) {
+        return send(400, { error: { message: 'size is an unsupported parameter' } });
+      }
+      if (body.prompt === 'reject-size-twice') {
+        return send(400, { error: { message: 'size is an unsupported parameter' } });
+      }
       if (body.prompt === 'timeout') {
         setTimeout(() => send(200, { data: [{ b64_json: PNG_BASE64 }] }), 200);
         return;

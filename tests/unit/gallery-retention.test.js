@@ -60,3 +60,29 @@ test('无效配置会被限制到安全范围，无日期记录不会因时间�
   );
   assert.deepEqual(selected.candidates.map(item => item.resultId), ['old']);
 });
+
+test('收藏图片同时排除在按时间和按数量的自动清理候选之外', () => {
+  const values = [
+    { ...result('favorite-oldest', '2020-01-01T00:00:00.000Z'), favorite: true },
+    result('ordinary-old', '2026-08-01T00:00:00.000Z'),
+    result('ordinary-new', '2026-09-03T00:00:00.000Z'),
+  ];
+  const settings = {
+    galleryCleanupByAge: true,
+    galleryMaxAgeDays: 7,
+    galleryCleanupByCount: true,
+    galleryMaxCount: 1,
+  };
+  const selected = selectCleanupCandidates(
+    values,
+    settings,
+    Date.parse('2026-09-07T00:00:00.000Z'),
+  );
+  assert.equal(selected.protectedFavoriteCount, 1);
+  assert.deepEqual(selected.candidates.map(item => item.resultId), ['ordinary-old', 'ordinary-new']);
+  assert.deepEqual(
+    serverRetention.selectCleanupCandidates(values, settings, Date.parse('2026-09-07T00:00:00.000Z'))
+      .candidates.map(item => item.resultId),
+    ['ordinary-old', 'ordinary-new'],
+  );
+});

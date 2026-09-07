@@ -63,7 +63,17 @@ function statusHeading(symbol, title, subtitle, tone = '') {
   return heading;
 }
 
-export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCancel, onRemove }) {
+export function createCard({
+  tag,
+  api,
+  getState,
+  getSettings = () => ({}),
+  onGenerate,
+  onAdjustRegenerate,
+  onOpenGallery,
+  onCancel,
+  onRemove,
+}) {
   const root = document.createElement('section');
   root.className = 'stia-card';
   root.dataset.tagId = tag.tagId;
@@ -81,6 +91,16 @@ export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCa
     const available = (state.results || []).filter(result => result.status === 'available');
     const latest = available.find(result => result.resultId === state.tag?.latestResultId)
       || available.at(-1);
+    const actualPrompt = latest?.promptSnapshot
+      || latest?.prompt
+      || attempt?.promptSnapshot
+      || attempt?.resolvedPrompt
+      || tag.prompt;
+    const actualNegativePrompt = latest?.negativePromptSnapshot
+      || attempt?.negativePromptSnapshot
+      || '';
+    const canAdjust = getSettings()?.enablePromptOverrideRegenerate === true
+      && typeof onAdjustRegenerate === 'function';
     const size = displaySize(attempt?.parameters?.size || '');
     const ratioLabel = {
       square: '方形',
@@ -103,7 +123,7 @@ export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCa
           : (isRegenerating ? '正在重新生成…' : (STATUS_TEXT[attempt.status] || '处理中')),
         isAutoQueue
           ? '等待当前生成任务完成'
-          : `${attempt.model || '当前模型'} · ${size || '默认尺寸'}`,
+          : (attempt.statusMessage || `${attempt.model || '当前模型'} · ${size || '默认尺寸'}`),
         isAutoQueue ? 'is-warning' : 'is-accent',
       ));
       if (!isAutoQueue) {
@@ -128,13 +148,13 @@ export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCa
       const image = document.createElement('img');
       image.className = 'stia-card__image';
       image.src = api.fileUrl(latest.resultId);
-      image.alt = tag.prompt.slice(0, 120);
+      image.alt = actualPrompt.slice(0, 120);
       image.loading = 'lazy';
       const openOriginal = () => openImageViewer({
         src: api.fileUrl(latest.resultId),
         alt: image.alt,
         filename: latest.resultId,
-        prompt: tag.prompt,
+        prompt: actualPrompt,
         meta: [attempt?.model, size].filter(Boolean).join(' · '),
       });
       makeImageSaveable(image, openOriginal);
@@ -163,7 +183,16 @@ export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCa
         button('查看 / 保存', 'stia-button--square', openOriginal, '⌕'),
         button('画廊', 'stia-button--square', () => onOpenGallery(tag.tagId), '▦'),
       );
-      body.append(completion, actions, promptDetails(tag.prompt));
+      if (canAdjust) {
+        actions.append(button('调整后重绘', '', () => onAdjustRegenerate(tag, {
+          prompt: actualPrompt,
+          negativePrompt: actualNegativePrompt,
+          provider: latest.provider || attempt?.provider || 'openai',
+          result: latest,
+          attempt,
+        }), '✎'));
+      }
+      body.append(completion, actions, promptDetails(actualPrompt));
       root.append(media, body);
       return;
     }
@@ -183,8 +212,14 @@ export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCa
       actions.append(button('重试', 'stia-button--danger-soft', () => {
         onGenerate(tag, 'manual');
       }, '↻'));
+      if (canAdjust) actions.append(button('调整后重绘', '', () => onAdjustRegenerate(tag, {
+        prompt: actualPrompt,
+        negativePrompt: actualNegativePrompt,
+        provider: attempt.provider || 'openai',
+        attempt,
+      }), '✎'));
       if (onRemove) actions.append(removeButton());
-      body.append(actions, promptDetails(tag.prompt));
+      body.append(actions, promptDetails(actualPrompt));
       root.append(body);
       return;
     }
@@ -208,7 +243,13 @@ export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCa
       onGenerate(tag, 'manual');
     }, '▧'));
     if (onRemove) actions.append(removeButton());
-    body.append(promptDetails(tag.prompt), actions);
+    if (canAdjust && attempt) actions.append(button('调整后重绘', '', () => onAdjustRegenerate(tag, {
+      prompt: actualPrompt,
+      negativePrompt: actualNegativePrompt,
+      provider: attempt.provider || 'openai',
+      attempt,
+    }), '✎'));
+    body.append(promptDetails(actualPrompt), actions);
     root.append(body);
   }
 

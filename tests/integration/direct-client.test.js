@@ -267,6 +267,91 @@ test('保存触发消息重绘时不会把当前自动任务误判为 interrupte
   });
 });
 
+test('GPT 临时提示词覆盖只用于本次请求，保存快照且不改原标签，并可持久收藏', async t => {
+  const originalFetch = globalThis.fetch;
+  const requestBodies = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if (url === 'https://api.example.com/v1/images/generations') {
+      requestBodies.push(JSON.parse(options.body));
+      if (requestBodies.length === 1) {
+        return response(400, { error: { message: "Unknown parameter: 'response_format'." } });
+      }
+      return response(200, { data: [{ b64_json: PNG_BASE64 }] });
+    }
+    if (url === '/api/images/upload') {
+      const body = JSON.parse(options.body);
+      return response(200, { path: `user/images/st-image-atelier/${body.filename}.${body.format}` });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  const tagId = crypto.randomUUID();
+  const messageUuid = crypto.randomUUID();
+  const originalMes = '<draw>original prompt</draw>';
+  const tag = {
+    tagId,
+    prompt: 'original prompt',
+    ordinal: 0,
+    attempts: [],
+    results: [],
+    resultIds: [],
+    latestResultId: null,
+  };
+  const message = {
+    mes: originalMes,
+    extra: { stImageAtelier: { messageUuid, tags: [tag] } },
+  };
+  const storage = new Map();
+  const extensionSettings = {};
+  const options = {
+    compat: {
+      chat: () => [message],
+      save: async () => {},
+      headers: () => ({ 'Content-Type': 'application/json' }),
+    },
+    extensionSettings,
+    saveSettingsDebounced: () => {},
+    keyStorage: {
+      getItem: key => storage.get(key) || null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: key => storage.delete(key),
+    },
+  };
+  const client = createDirectApiClient(options);
+  await client.updateSettings({ enableSmartRetry: true });
+  await client.updatePreset({
+    baseUrl: 'https://api.example.com',
+    apiKey: 'sk-test',
+    selectedModel: 'gpt-image-1',
+  });
+  const attempt = await client.generate({
+    tagId,
+    attemptId: crypto.randomUUID(),
+    requestMode: 'manual',
+    prompt: 'temporary changed prompt',
+    chatId: 'chat-1',
+    messageUuid,
+    tagOrdinal: 0,
+    parameters: { count: 1 },
+  });
+  assert.equal(requestBodies[0].prompt, 'temporary changed prompt');
+  assert.equal(requestBodies.length, 2);
+  assert.equal('response_format' in requestBodies[1], false);
+  assert.equal(tag.prompt, 'original prompt');
+  assert.equal(message.mes, originalMes);
+  const [state] = await client.resolveTags([tagId]);
+  const result = state.results.find(value => value.resultId === attempt.resultIds[0]);
+  assert.equal(result.promptSnapshot, 'temporary changed prompt');
+  assert.deepEqual(result.compatibilityRetry.adjustedParameters, ['response_format']);
+
+  await client.setFavorite(result.resultId, true);
+  assert.equal((await client.galleryMetadata()).items[0].favorite, true);
+  assert.equal(extensionSettings.stImageAtelier.gallery[0].favorite, true);
+  const reloaded = createDirectApiClient(options);
+  assert.equal((await reloaded.galleryMetadata()).items[0].favorite, true);
+});
+
 test('旧版单预设迁移为多预设，且每个预设独立保存密钥', async () => {
   const storage = new Map([['stImageAtelier.directApiKey.v1', 'sk-legacy']]);
   const extensionSettings = {
@@ -398,6 +483,7 @@ test('NovelAI 引擎使用独立 Token、画师串预设并保存生成结果', 
   const artist = await client.updateArtistPreset(novelAiData.activeArtistPresetId, {
     name: '柔光画师串',
     prompt: 'artist:sample, soft lighting',
+    negativePrompt: 'artist negative anatomy',
   });
 
   const attempt = await client.generate({
@@ -406,7 +492,8 @@ test('NovelAI 引擎使用独立 Token、画师串预设并保存生成结果', 
     requestMode: 'manual',
     provider: 'novelai',
     artistPresetId: artist.id,
-    prompt: '1girl, sunset',
+    prompt: '1girl, moonlight',
+    negativePromptOverride: 'bad hands, lowres',
     chatId: 'chat-nai',
     messageUuid,
     tagOrdinal: 0,
@@ -417,13 +504,21 @@ test('NovelAI 引擎使用独立 Token、画师串预设并保存生成结果', 
   assert.equal(attempt.artistPresetNameSnapshot, '柔光画师串');
   assert.equal(attempt.generationSeed, 42);
   assert.equal(novelAiRequest.options.headers.Authorization, 'Bearer nai-secret-token');
-  assert.match(novelAiRequest.body.input, /^artist:sample, soft lighting, 1girl, sunset/);
+  assert.match(novelAiRequest.body.input, /^artist:sample, soft lighting, 1girl, moonlight/);
+  assert.match(
+    novelAiRequest.body.parameters.negative_prompt,
+    /^artist negative anatomy, bad hands, lowres/,
+  );
   assert.equal(novelAiRequest.body.parameters.width, 512);
   assert.equal(novelAiRequest.body.parameters.height, 768);
 
   const [state] = await client.resolveTags([tagId]);
   assert.equal(state.results.length, 1);
   assert.equal(state.results[0].provider, 'novelai');
+  assert.equal(state.results[0].promptSnapshot, '1girl, moonlight');
+  assert.equal(state.results[0].negativePromptSnapshot, 'bad hands, lowres');
+  assert.equal(message.extra.stImageAtelier.tags[0].prompt, '1girl, sunset');
+  assert.equal(message.mes, '<draw>1girl, sunset</draw>');
   assert.equal(state.results[0].artistPresetNameSnapshot, '柔光画师串');
   assert.equal(state.results[0].generationSeed, 42);
   assert.doesNotMatch(JSON.stringify(extensionSettings), /nai-secret-token/);

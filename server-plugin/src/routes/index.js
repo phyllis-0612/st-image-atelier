@@ -29,7 +29,7 @@ function registerRoutes(router, registry = new ServiceRegistry()) {
     await registry.get(request);
     ok(response, {
       id: 'st-image-atelier',
-      version: '1.5.0',
+      version: '1.6.0',
       status: 'ready',
       schemaVersion: 1,
     });
@@ -119,6 +119,11 @@ function registerRoutes(router, registry = new ServiceRegistry()) {
     }));
   }));
 
+  router.get('/gallery-metadata', asyncRoute(async (request, response) => {
+    const services = await registry.get(request);
+    ok(response, services.gallery.metadataList());
+  }));
+
   router.post('/gallery/cleanup', asyncRoute(async (request, response) => {
     const services = await registry.get(request);
     const settings = await services.preset.getSettings();
@@ -138,6 +143,14 @@ function registerRoutes(router, registry = new ServiceRegistry()) {
   router.delete('/gallery/:resultId', asyncRoute(async (request, response) => {
     const services = await registry.get(request);
     ok(response, await services.gallery.delete(request.params.resultId));
+  }));
+
+  router.patch('/gallery/:resultId', asyncRoute(async (request, response) => {
+    const services = await registry.get(request);
+    ok(response, await services.gallery.setFavorite(
+      request.params.resultId,
+      request.body?.favorite === true,
+    ));
   }));
 
   return registry;

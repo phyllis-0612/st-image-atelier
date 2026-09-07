@@ -178,25 +178,161 @@ test('responseFormat 可改为 url 或不发送；额外请求参数 JSON 优先
   assert.equal(bodies[2].response_format, 'url');
 });
 
-test('上游点名拒绝 response_format 时自动去掉重发一次', async t => {
+test('智能重试开启时，上游点名拒绝 response_format 才会去掉并重发一次', async t => {
   const bodies = captureFetch(t, (body, attempt) => {
     if ('response_format' in body) {
       return new Response(JSON.stringify({ error: { message: "Unknown parameter: 'response_format'." } }), { status: 400 });
     }
     return OK();
   });
-  const results = await generateImages({ preset: presetFor(), apiKey: 'sk', prompt: 'x', parameters: {}, settings: {} });
+  const progress = [];
+  const results = await generateImages({
+    preset: presetFor(),
+    apiKey: 'sk',
+    prompt: 'x',
+    parameters: {},
+    settings: { enableSmartRetry: true },
+    onCompatibilityRetry: retry => progress.push(retry),
+  });
   assert.equal(bodies.length, 2, '第一次被拒、第二次去掉字段重发');
   assert.equal('response_format' in bodies[1], false);
   assert.equal(results.length, 1);
+  assert.deepEqual(progress[0].adjustedParameters, ['response_format']);
+  assert.match(progress[0].message, /重试（1\/1）/);
 });
 
-test('其他 400 原因不触发重发，原样报错', async t => {
+test('智能重试关闭时不增加请求，其他 400 原因也不触发重发', async t => {
   const bodies = captureFetch(t, () =>
-    new Response(JSON.stringify({ error: { message: 'quality 必须是 low 或 medium' } }), { status: 400 }));
+    new Response(JSON.stringify({ error: { message: "Unknown parameter: 'response_format'." } }), { status: 400 }));
   await assert.rejects(
     generateImages({ preset: presetFor(), apiKey: 'sk', prompt: 'x', parameters: {}, settings: {} }),
-    error => error.code === 'UPSTREAM_HTTP_ERROR' && /quality/.test(error.message),
+    error => error.code === 'UPSTREAM_HTTP_ERROR' && /response_format/.test(error.message),
   );
   assert.equal(bodies.length, 1);
+});
+
+test('智能重试只移除错误明确点名的 size、quality 或 n', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  for (const [parameter, message] of [
+    ['size', 'size is an unsupported parameter'],
+    ['quality', 'quality must be omitted because it is not supported'],
+    ['n', "parameter 'n' is not allowed"],
+  ]) {
+    const bodies = [];
+    globalThis.fetch = async (_url, options) => {
+      const body = JSON.parse(options.body);
+      bodies.push(body);
+      if (bodies.length === 1) {
+        return new Response(JSON.stringify({ error: { message } }), { status: 422 });
+      }
+      return OK();
+    };
+    const extraBody = { size: '512x768', quality: 'high', n: 2 };
+    await generateImages({
+      preset: presetFor({ responseFormat: '', extraBody }),
+      apiKey: 'sk',
+      prompt: 'x',
+      parameters: {},
+      settings: { enableSmartRetry: true },
+    });
+    assert.equal(bodies.length, 2, parameter);
+    assert.equal(parameter in bodies[1], false, parameter);
+    for (const kept of Object.keys(extraBody).filter(name => name !== parameter)) {
+      assert.equal(bodies[1][kept], extraBody[kept], `${parameter} 报错时保留 ${kept}`);
+    }
+  }
+});
+
+test('审核、鉴权、限流、网络、5xx 和未知错误禁止智能重试', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const cases = [
+    [401, 'invalid api key'],
+    [403, 'permission denied'],
+    [429, 'rate limited'],
+    [500, 'internal error: unsupported quality'],
+    [400, 'Content was rejected by upstream moderation: unsupported quality'],
+    [400, 'some unknown business error'],
+  ];
+  for (const [status, message] of cases) {
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ error: { message } }), { status });
+    };
+    await assert.rejects(generateImages({
+      preset: presetFor({ extraBody: { quality: 'high' } }),
+      apiKey: 'sk', prompt: 'x', parameters: {}, settings: { enableSmartRetry: true },
+    }));
+    assert.equal(calls, 1, `HTTP ${status}: ${message}`);
+  }
+
+  let networkCalls = 0;
+  globalThis.fetch = async () => {
+    networkCalls += 1;
+    throw new TypeError('Failed to fetch');
+  };
+  await assert.rejects(generateImages({
+    preset: presetFor(), apiKey: 'sk', prompt: 'x', parameters: {}, settings: { enableSmartRetry: true },
+  }));
+  assert.equal(networkCalls, 1);
+});
+
+test('兼容重试第二次仍失败时停止，并附带已尝试修正记录', async t => {
+  let calls = 0;
+  const bodies = captureFetch(t, () => {
+    calls += 1;
+    return new Response(JSON.stringify({
+      error: { message: calls === 1 ? 'size is unsupported' : 'second real failure' },
+    }), { status: 400 });
+  });
+  await assert.rejects(
+    generateImages({
+      preset: presetFor({ extraBody: { size: '512x768' } }),
+      apiKey: 'sk', prompt: 'x', parameters: {}, settings: { enableSmartRetry: true },
+    }),
+    error => /second real failure/.test(error.message)
+      && error.compatibilityRetry?.adjustedParameters?.[0] === 'size',
+  );
+  assert.equal(bodies.length, 2);
+});
+
+test('取消发生在回退前时不发送第二次请求；多图仍按一个任务只重试一次', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const controller = new AbortController();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ error: { message: 'size is unsupported' } }), { status: 400 });
+  };
+  await assert.rejects(generateImages({
+    preset: presetFor({ extraBody: { size: '512x768' } }),
+    apiKey: 'sk',
+    prompt: 'x',
+    parameters: { count: 2 },
+    settings: { enableSmartRetry: true },
+    signal: controller.signal,
+    onCompatibilityRetry: () => controller.abort(new Error('user cancelled')),
+  }));
+  assert.equal(calls, 1);
+
+  calls = 0;
+  globalThis.fetch = async (_url, options) => {
+    calls += 1;
+    const body = JSON.parse(options.body);
+    if ('size' in body) {
+      return new Response(JSON.stringify({ error: { message: 'size is unsupported' } }), { status: 400 });
+    }
+    return new Response(JSON.stringify({
+      data: [{ b64_json: 'AAAA' }, { b64_json: 'BBBB' }],
+    }), { status: 200 });
+  };
+  const results = await generateImages({
+    preset: presetFor({ extraBody: { size: '512x768', n: 2 } }),
+    apiKey: 'sk', prompt: 'x', parameters: { count: 2 }, settings: { enableSmartRetry: true },
+  });
+  assert.equal(calls, 2);
+  assert.equal(results.length, 2);
 });

@@ -165,7 +165,8 @@ export async function fetchJson(url, options, timeoutMs) {
   const timer = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
   const externalSignal = options.signal;
   const abort = () => controller.abort(externalSignal.reason);
-  externalSignal?.addEventListener('abort', abort, { once: true });
+  if (externalSignal?.aborted) abort();
+  else externalSignal?.addEventListener('abort', abort, { once: true });
   try {
     const response = await fetch(url, { ...options, signal: controller.signal, redirect: 'error' });
     const text = await response.text();
@@ -191,7 +192,43 @@ function authorization(apiKey) {
   return { Authorization: `Bearer ${apiKey}` };
 }
 
-export async function generateImages({ preset, apiKey, prompt, parameters, settings, signal }) {
+const SMART_RETRY_PARAMETERS = Object.freeze([
+  ['response_format', /response[_ -]?format/i],
+  ['size', /\bsize\b|尺寸/i],
+  ['quality', /\bquality\b|质量/i],
+  ['n', /(?:parameter|param|field|参数)\s*['"`]?n(?:['"`]|\b)|\bn_samples\b|number of images|张数/i],
+]);
+
+const PARAMETER_INCOMPATIBLE = /unsupported|not support|unknown (?:parameter|field)|unrecognized|invalid|unexpected|not allowed|must be|expected|不支持|未知参数|无效|非法|不兼容|不允许/i;
+const NEVER_RETRY_REASON = /moderation|content (?:was )?rejected|safety|content policy|内容审核|安全策略|余额|quota|配额/i;
+
+export function detectCompatibilityRetry(error, body = {}) {
+  if (!(error instanceof DirectError)
+    || error.code !== 'UPSTREAM_HTTP_ERROR'
+    || ![400, 422].includes(error.status)) return null;
+  const details = String(error.details || '');
+  if (!PARAMETER_INCOMPATIBLE.test(details) || NEVER_RETRY_REASON.test(details)) return null;
+  const adjustedParameters = SMART_RETRY_PARAMETERS
+    .filter(([name, pattern]) => Object.hasOwn(body, name) && pattern.test(details))
+    .map(([name]) => name);
+  if (!adjustedParameters.length) return null;
+  return {
+    attempted: true,
+    adjustedParameters,
+    reason: `${adjustedParameters.join('、')} 参数不兼容`,
+    message: `检测到 ${adjustedParameters.join('、')} 参数不兼容，正在回退并重试（1/1）`,
+  };
+}
+
+export async function generateImages({
+  preset,
+  apiKey,
+  prompt,
+  parameters,
+  settings,
+  signal,
+  onCompatibilityRetry,
+}) {
   if (!preset.baseUrl) throw new DirectError('PRESET_NOT_CONFIGURED');
   if (!apiKey) throw new DirectError('API_KEY_MISSING');
   if (!preset.selectedModel) throw new DirectError('MODEL_NOT_SELECTED');
@@ -222,11 +259,19 @@ export async function generateImages({ preset, apiKey, prompt, parameters, setti
   try {
     payload = await request(body);
   } catch (error) {
-    /* 官方 gpt-image 系列不接受 response_format（它本来就只返回 base64），
-       上游点名拒绝这个字段时自动去掉重发一次，不用用户自己改设置。 */
-    if (!rejectsResponseFormat(error) || !('response_format' in body)) throw error;
-    const { response_format: _omit, ...withoutFormat } = body;
-    payload = await request(withoutFormat);
+    const retry = settings?.enableSmartRetry ? detectCompatibilityRetry(error, body) : null;
+    if (!retry || signal?.aborted) throw error;
+    const fallbackBody = { ...body };
+    for (const parameter of retry.adjustedParameters) delete fallbackBody[parameter];
+    console.info('[Image Atelier] 智能兼容重试', retry.reason);
+    await onCompatibilityRetry?.(retry);
+    if (signal?.aborted) throw signal.reason || new DirectError('UPSTREAM_TIMEOUT', '请求已取消');
+    try {
+      payload = await request(fallbackBody);
+    } catch (retryError) {
+      retryError.compatibilityRetry = retry;
+      throw retryError;
+    }
   }
   return parseImageResponse(payload);
 }
@@ -240,10 +285,8 @@ export function normalizeResponseFormat(value) {
 }
 
 export function rejectsResponseFormat(error) {
-  return error instanceof DirectError
-    && error.code === 'UPSTREAM_HTTP_ERROR'
-    && error.status === 400
-    && /response_format/i.test(String(error.details || ''));
+  return Boolean(detectCompatibilityRetry(error, { response_format: 'b64_json' })
+    ?.adjustedParameters.includes('response_format'));
 }
 
 export async function listModelsDirect({ preset, apiKey, settings, signal }) {
