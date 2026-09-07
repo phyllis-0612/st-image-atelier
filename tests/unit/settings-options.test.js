@@ -14,3 +14,10 @@ test('常用尺寸选项包含 512x768，且使用接口兼容格式', () => {
     assert.match(value, /^\d+x\d+$/);
   }
 });
+
+test('生图参数下拉自带「不发送」选项，值为空串以便直接映射 sendSize / sendQuality / sendN', async () => {
+  const { SKIP_PARAM_OPTION } = await import('../../src/ui/pages/settings/settings.js');
+  assert.equal(SKIP_PARAM_OPTION[0], '');
+  assert.ok(/不发送/.test(SKIP_PARAM_OPTION[1]));
+  assert.ok(!IMAGE_SIZE_OPTIONS.some(([value]) => value === ''), '尺寸列表本身不含空值，空值只由下拉层加入');
+});

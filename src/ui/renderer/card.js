@@ -63,11 +63,17 @@ function statusHeading(symbol, title, subtitle, tone = '') {
   return heading;
 }
 
-export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCancel }) {
+export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCancel, onRemove }) {
   const root = document.createElement('section');
   root.className = 'stia-card';
   root.dataset.tagId = tag.tagId;
   root.setAttribute('aria-label', 'Image Atelier 生图卡片');
+
+  /* 一键删除：卡片、消息里的 <draw> 注入词、标签元数据一起清掉，不留痕迹。
+     只在失败和待生成两种状态提供；已出图的走画廊删除，生成中的先取消。 */
+  function removeButton() {
+    return button('删除', 'stia-button--ghost stia-card__remove', () => onRemove(tag), '×');
+  }
 
   function render() {
     const state = getState(tag.tagId) || {};
@@ -172,10 +178,13 @@ export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCa
         attempt.errorMessage || '请稍后重试',
         'is-danger',
       ));
-      body.append(button('重试', 'stia-button--danger-soft stia-button--full', () => {
+      const actions = document.createElement('div');
+      actions.className = 'stia-actions stia-actions--fill';
+      actions.append(button('重试', 'stia-button--danger-soft', () => {
         onGenerate(tag, 'manual');
       }, '↻'));
-      body.append(promptDetails(tag.prompt));
+      if (onRemove) actions.append(removeButton());
+      body.append(actions, promptDetails(tag.prompt));
       root.append(body);
       return;
     }
@@ -193,12 +202,13 @@ export function createCard({ tag, api, getState, onGenerate, onOpenGallery, onCa
       deleted.textContent = '上一张图片已删除，可以重新生成。';
       body.append(deleted);
     }
-    body.append(
-      promptDetails(tag.prompt),
-      button(attempt ? '重新生成' : '生成图片', 'stia-button--primary stia-button--full', () => {
-        onGenerate(tag, 'manual');
-      }, '▧'),
-    );
+    const actions = document.createElement('div');
+    actions.className = 'stia-actions stia-actions--fill';
+    actions.append(button(attempt ? '重新生成' : '生成图片', 'stia-button--primary', () => {
+      onGenerate(tag, 'manual');
+    }, '▧'));
+    if (onRemove) actions.append(removeButton());
+    body.append(promptDetails(tag.prompt), actions);
     root.append(body);
   }
 

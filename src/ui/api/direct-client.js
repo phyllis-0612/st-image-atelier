@@ -361,6 +361,8 @@ export function createDirectApiClient({
         `无法下载图片，可能被浏览器 CORS 阻止：${error?.message || 'Failed to fetch'}`,
         0,
         true,
+        '生图成功了，但浏览器下载不了上游返回的图片（图床没开 CORS 或有跳转）；'
+          + '请在“高级设置”把「图片返回格式」设为 b64_json 内嵌返回',
       );
     } finally {
       clearTimeout(timer);

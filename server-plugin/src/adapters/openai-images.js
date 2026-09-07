@@ -132,6 +132,8 @@ async function generate({ preset, apiKey, prompt, parameters, settings, signal }
   if (preset.sendSize) body.size = normalizeImageSize(parameters.size || preset.defaultSize);
   if (preset.sendQuality) body.quality = parameters.quality || preset.defaultQuality;
   if (preset.sendN) body.n = parameters.count || preset.defaultCount;
+  const responseFormat = preset.responseFormat === undefined ? 'b64_json' : String(preset.responseFormat || '');
+  if (['b64_json', 'url'].includes(responseFormat)) body.response_format = responseFormat;
   Object.assign(body, preset.extraBody || {}, parameters.extraBody || {});
   body.model = preset.selectedModel;
   body.prompt = prompt;

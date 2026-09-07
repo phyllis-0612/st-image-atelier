@@ -152,8 +152,12 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
       processMessage(messageId, { live: true, generationType }));
     compat.on(['CHARACTER_MESSAGE_RENDERED', 'MESSAGE_RENDERED'], messageId =>
       processMessage(messageId, { live: false }));
+    /* 改写事件会赶在酒馆用 mes 重建这一层 DOM 之前到达。直接 processMessage 等于对着
+       旧 DOM 干活：卡片还在、提示词还没回来，mount 判定无事可做直接退出；等重建真的发生，
+       事件已经消耗掉了。改走 scheduleMessage，等 DOM_SETTLE_MS 落定后再处理，
+       与 MutationObserver 走同一条路，并合并成一次。 */
     compat.on(['MESSAGE_UPDATED', 'MESSAGE_EDITED'], messageId =>
-      processMessage(messageId, { live: false }));
+      scheduleMessage(messageId, { live: false }));
     compat.on(['CHAT_CHANGED'], () => {
       queueMicrotask(() => {
         observeChat();

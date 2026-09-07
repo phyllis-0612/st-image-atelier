@@ -81,7 +81,7 @@ test('浏览器网络/CORS 失败映射为明确错误', async t => {
   t.after(() => { globalThis.fetch = originalFetch; });
   await assert.rejects(
     fetchJson('https://api.example.com/v1/models', {}, 1000),
-    error => error.code === 'DIRECT_FETCH_BLOCKED' && /浏览器无法读取/.test(error.message),
+    error => error.code === 'DIRECT_FETCH_BLOCKED' && /浏览器连不上生图接口/.test(error.message),
   );
 });
 
@@ -120,7 +120,7 @@ test('上游内容审核拒绝显示针对性提示', async t => {
     fetchJson('https://api.example.com/v1/images/generations', {}, 1000),
     error => error.code === 'UPSTREAM_HTTP_ERROR'
       && /内容审核拒绝/.test(error.message)
-      && !/关闭 size/.test(error.message),
+      && !/不发送/.test(error.message),
   );
 });
 
@@ -128,4 +128,75 @@ test('浏览器 Base64 转换与图片 magic bytes 校验', () => {
   const bytes = base64ToBytes(PNG_BASE64);
   assert.equal(detectImageType(bytes)?.extension, 'png');
   assert.equal(bytesToBase64(bytes), PNG_BASE64);
+});
+
+/* 图片返回格式：默认请求 b64_json 内嵌返回（1.5.4） */
+function presetFor(extra = {}) {
+  return {
+    baseUrl: 'https://api.example.com',
+    generationPath: '/v1/images/generations',
+    selectedModel: 'image-model',
+    sendSize: false,
+    sendQuality: false,
+    sendN: false,
+    timeoutMs: 1000,
+    extraBody: {},
+    ...extra,
+  };
+}
+
+function captureFetch(t, handler) {
+  const originalFetch = globalThis.fetch;
+  const bodies = [];
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    bodies.push(body);
+    return handler(body, bodies.length);
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  return bodies;
+}
+
+const OK = () => new Response(JSON.stringify({ data: [{ b64_json: 'AAAA' }] }), { status: 200 });
+
+test('旧预设没有 responseFormat 字段时默认请求 b64_json', async t => {
+  const bodies = captureFetch(t, OK);
+  await generateImages({ preset: presetFor(), apiKey: 'sk', prompt: 'x', parameters: {}, settings: {} });
+  assert.equal(bodies[0].response_format, 'b64_json');
+});
+
+test('responseFormat 可改为 url 或不发送；额外请求参数 JSON 优先级最高', async t => {
+  const bodies = captureFetch(t, OK);
+  await generateImages({ preset: presetFor({ responseFormat: 'url' }), apiKey: 'sk', prompt: 'x', parameters: {}, settings: {} });
+  await generateImages({ preset: presetFor({ responseFormat: '' }), apiKey: 'sk', prompt: 'x', parameters: {}, settings: {} });
+  await generateImages({
+    preset: presetFor({ extraBody: { response_format: 'url' } }),
+    apiKey: 'sk', prompt: 'x', parameters: {}, settings: {},
+  });
+  assert.equal(bodies[0].response_format, 'url');
+  assert.equal('response_format' in bodies[1], false);
+  assert.equal(bodies[2].response_format, 'url');
+});
+
+test('上游点名拒绝 response_format 时自动去掉重发一次', async t => {
+  const bodies = captureFetch(t, (body, attempt) => {
+    if ('response_format' in body) {
+      return new Response(JSON.stringify({ error: { message: "Unknown parameter: 'response_format'." } }), { status: 400 });
+    }
+    return OK();
+  });
+  const results = await generateImages({ preset: presetFor(), apiKey: 'sk', prompt: 'x', parameters: {}, settings: {} });
+  assert.equal(bodies.length, 2, '第一次被拒、第二次去掉字段重发');
+  assert.equal('response_format' in bodies[1], false);
+  assert.equal(results.length, 1);
+});
+
+test('其他 400 原因不触发重发，原样报错', async t => {
+  const bodies = captureFetch(t, () =>
+    new Response(JSON.stringify({ error: { message: 'quality 必须是 low 或 medium' } }), { status: 400 }));
+  await assert.rejects(
+    generateImages({ preset: presetFor(), apiKey: 'sk', prompt: 'x', parameters: {}, settings: {} }),
+    error => error.code === 'UPSTREAM_HTTP_ERROR' && /quality/.test(error.message),
+  );
+  assert.equal(bodies.length, 1);
 });

@@ -33,5 +33,9 @@ export function createStore() {
       state.tagStates.set(tagId, value);
       emit();
     },
+    removeTag(tagId) {
+      if (!state.tagStates.delete(tagId)) return;
+      emit();
+    },
   };
 }

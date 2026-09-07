@@ -108,6 +108,7 @@ export const DEFAULT_PRESET = Object.freeze({
   sendSize: true,
   sendQuality: true,
   sendN: true,
+  responseFormat: 'b64_json',
   timeoutMs: 180_000,
   extraBody: {},
   ratioMap: {

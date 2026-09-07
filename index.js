@@ -16,6 +16,7 @@ import { createMessageEvents } from './src/ui/events/message-events.js';
 import { createToolPanel } from './src/ui/pages/settings/settings.js';
 import { installToolMenuEntry } from './src/ui/menu/tool-menu.js';
 import { applyThemeMode } from './src/ui/theme/theme.js';
+import { removeDrawTagFromMessage } from './src/ui/state/tag-removal.js';
 
 const compat = createStCompat({
   getContext,
@@ -153,9 +154,38 @@ const actions = {
     }
   },
   openGallery: () => panel.show('gallery'),
+  remove: async tag => removeTag(tag),
 };
 const renderer = createMessageRenderer({ compat, api, store, actions });
 const events = createMessageEvents({ compat, api, store, renderer, autoQueue });
+
+/* 一键删除：卡片 + 消息里的 <draw> 注入词 + 标签元数据一起清掉，落盘后不留痕迹。 */
+async function removeTag(tag) {
+  if (activeTags.has(tag.tagId)) return false;
+  const chat = compat.chat();
+  const messageId = chat.findIndex(message => {
+    const metadata = message?.extra?.stImageAtelier;
+    if (!metadata) return false;
+    if (tag.messageUuid && metadata.messageUuid === tag.messageUuid) return true;
+    return (metadata.tags || []).some(item => item?.tagId === tag.tagId);
+  });
+  if (messageId < 0) {
+    renderer.removeCard(tag.tagId);
+    store.removeTag(tag.tagId);
+    return false;
+  }
+  const { changed } = removeDrawTagFromMessage(chat[messageId], tag.tagId);
+  renderer.removeCard(tag.tagId);
+  store.removeTag(tag.tagId);
+  if (!changed) return false;
+  try {
+    await compat.save();
+  } catch (error) {
+    console.error('[Image Atelier] 删除生图标签后无法保存聊天', error);
+  }
+  await events.processMessage(messageId, { live: false });
+  return true;
+}
 
 function installToolButton() {
   installToolMenuEntry({

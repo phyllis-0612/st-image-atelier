@@ -1126,3 +1126,7 @@
     transition: none !important;
   }
 }
+
+.stia-actions--fill > .stia-card__remove {
+  flex: 0 0 auto;
+}

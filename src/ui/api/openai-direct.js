@@ -7,7 +7,7 @@ const ERROR_MESSAGES = {
   UPSTREAM_TIMEOUT: '请求超时',
   UPSTREAM_HTTP_ERROR: '上游服务错误',
   UPSTREAM_RESPONSE_INVALID: '返回格式不兼容',
-  DIRECT_FETCH_BLOCKED: '浏览器无法读取生图接口或返回图片，请检查地址、网络和 CORS 设置',
+  DIRECT_FETCH_BLOCKED: '浏览器连不上生图接口（网络层失败，没有收到任何响应），请检查地址、网络和中转站的 CORS 设置',
   IMAGE_DOWNLOAD_FAILED: '图片下载失败',
   LOCAL_SAVE_FAILED: '图片保存到酒馆失败',
   VALIDATION_FAILED: '请求参数无效',
@@ -149,7 +149,7 @@ function mapStatus(status, bodyText) {
     : moderationRejected
       ? '；提示词被上游内容审核拒绝，请减少强迫、暴力、露骨或高风险内容后重试'
       : status === 400
-        ? '；若上游提示参数不支持，可在“高级设置”关闭 size、quality 或 n'
+        ? '；若上游提示参数不支持，可把「默认尺寸 / 默认质量 / 默认数量」改成「不发送」'
         : '';
   return new DirectError(
     'UPSTREAM_HTTP_ERROR',
@@ -204,17 +204,46 @@ export async function generateImages({ preset, apiKey, prompt, parameters, setti
   if (preset.sendSize) body.size = normalizeImageSize(parameters.size || preset.defaultSize);
   if (preset.sendQuality) body.quality = parameters.quality || preset.defaultQuality;
   if (preset.sendN) body.n = parameters.count || preset.defaultCount;
+  /* 默认请求 b64_json 内嵌返回：很多中转站会把图片转成图床 URL，浏览器再去拉那张图时
+     常被 CORS 或跳转拦下（尤其手机）。内嵌返回跳过这一步。「额外请求参数 JSON」可覆盖。 */
+  const responseFormat = normalizeResponseFormat(preset.responseFormat);
+  if (responseFormat) body.response_format = responseFormat;
   Object.assign(body, preset.extraBody || {}, parameters.extraBody || {});
   body.model = preset.selectedModel;
   body.prompt = prompt.trim();
   if ('size' in body) body.size = normalizeImageSize(body.size);
-  const payload = await fetchJson(endpoint, {
+  const request = payloadBody => fetchJson(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authorization(apiKey) },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payloadBody),
     signal,
   }, preset.timeoutMs);
+  let payload;
+  try {
+    payload = await request(body);
+  } catch (error) {
+    /* 官方 gpt-image 系列不接受 response_format（它本来就只返回 base64），
+       上游点名拒绝这个字段时自动去掉重发一次，不用用户自己改设置。 */
+    if (!rejectsResponseFormat(error) || !('response_format' in body)) throw error;
+    const { response_format: _omit, ...withoutFormat } = body;
+    payload = await request(withoutFormat);
+  }
   return parseImageResponse(payload);
+}
+
+export const RESPONSE_FORMATS = Object.freeze(['b64_json', 'url', '']);
+
+export function normalizeResponseFormat(value) {
+  if (value === undefined || value === null) return 'b64_json';
+  const text = String(value).trim();
+  return RESPONSE_FORMATS.includes(text) ? text : 'b64_json';
+}
+
+export function rejectsResponseFormat(error) {
+  return error instanceof DirectError
+    && error.code === 'UPSTREAM_HTTP_ERROR'
+    && error.status === 400
+    && /response_format/i.test(String(error.details || ''));
 }
 
 export async function listModelsDirect({ preset, apiKey, settings, signal }) {

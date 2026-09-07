@@ -27,6 +27,7 @@ function defaultPreset() {
     sendSize: true,
     sendQuality: true,
     sendN: true,
+    responseFormat: 'b64_json',
     timeoutMs: 180000,
     extraBody: {},
     ratioMap: {
@@ -72,6 +73,10 @@ function sanitizePreset(input, current = defaultPreset()) {
   }
   for (const field of ['sendSize', 'sendQuality', 'sendN']) {
     if (field in input) output[field] = Boolean(input[field]);
+  }
+  if ('responseFormat' in input) {
+    const format = String(input.responseFormat ?? '').trim();
+    output.responseFormat = ['b64_json', 'url', ''].includes(format) ? format : 'b64_json';
   }
   if ('defaultCount' in input) output.defaultCount = Math.min(4, Math.max(1, Number(input.defaultCount) || 1));
   if ('timeoutMs' in input) output.timeoutMs = Math.min(600_000, Math.max(30_000, Number(input.timeoutMs) || 180_000));

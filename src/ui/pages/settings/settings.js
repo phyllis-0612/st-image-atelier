@@ -5,6 +5,10 @@ import {
   normalizeNovelAiEndpoint,
 } from '../../api/novelai-direct.js';
 
+/* 三个生图参数下拉都带一个「不发送」：选中后无论 <draw> 标签写了什么都不发这个字段，
+   交给上游用自己的默认值。对应预设里的 sendSize / sendQuality / sendN。 */
+export const SKIP_PARAM_OPTION = Object.freeze(['', '不发送（由上游决定）']);
+
 export const IMAGE_SIZE_OPTIONS = Object.freeze([
   ['auto', 'auto（由模型决定）'],
   ['256x256', '256 × 256（方图）'],
@@ -160,8 +164,9 @@ export function createToolPanel({ api, store }) {
   modelsPath.placeholder = '/v1/models';
   const generationPath = input();
   generationPath.placeholder = '/v1/images/generations';
-  const defaultSize = select(IMAGE_SIZE_OPTIONS);
+  const defaultSize = select([SKIP_PARAM_OPTION, ...IMAGE_SIZE_OPTIONS]);
   const defaultQuality = select([
+    SKIP_PARAM_OPTION,
     ['auto', 'auto'],
     ['low', 'low'],
     ['medium', 'medium'],
@@ -170,6 +175,7 @@ export function createToolPanel({ api, store }) {
     ['hd', 'hd'],
   ]);
   const defaultCount = select([
+    SKIP_PARAM_OPTION,
     ['1', '1 张'],
     ['2', '2 张'],
     ['3', '3 张'],
@@ -181,9 +187,11 @@ export function createToolPanel({ api, store }) {
   const extraBody = document.createElement('textarea');
   extraBody.rows = 4;
   extraBody.placeholder = '{"background":"transparent"}';
-  const sendSize = input('checkbox');
-  const sendQuality = input('checkbox');
-  const sendN = input('checkbox');
+  const responseFormat = select([
+    ['b64_json', 'b64_json（内嵌返回，推荐）'],
+    ['url', 'url（图床地址，需图床允许 CORS）'],
+    ['', '不发送（由上游决定）'],
+  ]);
 
   const novelAiBaseUrl = input('url');
   novelAiBaseUrl.placeholder = '例如：https://中转站/api（填 /api/v1 也会自动兼容）';
@@ -468,18 +476,28 @@ export function createToolPanel({ api, store }) {
     baseUrl.value = preset.baseUrl || '';
     modelsPath.value = preset.modelsPath || '/v1/models';
     generationPath.value = preset.generationPath || '/v1/images/generations';
-    setSelectValue(
-      defaultSize,
-      preset.defaultSize || '1024x1024',
-      String(preset.defaultSize || '1024x1024').replace(/x/gi, ' × '),
-    );
-    setSelectValue(defaultQuality, preset.defaultQuality || 'auto');
-    setSelectValue(defaultCount, String(preset.defaultCount || 1), `${preset.defaultCount || 1} 张`);
+    if (preset.sendSize === false) {
+      defaultSize.value = '';
+    } else {
+      setSelectValue(
+        defaultSize,
+        preset.defaultSize || '1024x1024',
+        String(preset.defaultSize || '1024x1024').replace(/x/gi, ' × '),
+      );
+    }
+    if (preset.sendQuality === false) {
+      defaultQuality.value = '';
+    } else {
+      setSelectValue(defaultQuality, preset.defaultQuality || 'auto');
+    }
+    if (preset.sendN === false) {
+      defaultCount.value = '';
+    } else {
+      setSelectValue(defaultCount, String(preset.defaultCount || 1), `${preset.defaultCount || 1} 张`);
+    }
     timeout.value = String(Math.round((preset.timeoutMs || 180000) / 1000));
     extraBody.value = JSON.stringify(preset.extraBody || {}, null, 2);
-    sendSize.checked = preset.sendSize !== false;
-    sendQuality.checked = preset.sendQuality !== false;
-    sendN.checked = preset.sendN !== false;
+    setSelectValue(responseFormat, preset.responseFormat ?? 'b64_json');
     apiKey.value = '';
     apiKey.placeholder = preset.hasApiKey
       ? `当前预设已保存：${preset.apiKeyMask}`
@@ -509,6 +527,7 @@ export function createToolPanel({ api, store }) {
 
   async function saveCurrentPreset(presetId = activePresetId) {
     if (!presetId) throw new Error('没有可保存的 API 预设');
+    const previous = presets.find(item => item.id === presetId) || {};
     const preset = await api.updatePreset(presetId, {
       name: presetName.value.trim() || '未命名预设',
       baseUrl: baseUrl.value.trim(),
@@ -516,13 +535,15 @@ export function createToolPanel({ api, store }) {
       modelsPath: modelsPath.value.trim() || '/v1/models',
       generationPath: generationPath.value.trim() || '/v1/images/generations',
       selectedModel: model.value,
-      defaultSize: defaultSize.value,
-      defaultQuality: defaultQuality.value,
-      defaultCount: Number(defaultCount.value),
+      /* 「不发送」时保留上一次的默认值，改回来不用重新选 */
+      defaultSize: defaultSize.value || previous.defaultSize || '1024x1024',
+      defaultQuality: defaultQuality.value || previous.defaultQuality || 'auto',
+      defaultCount: Number(defaultCount.value || previous.defaultCount || 1),
       timeoutMs: Number(timeout.value) * 1000,
-      sendSize: sendSize.checked,
-      sendQuality: sendQuality.checked,
-      sendN: sendN.checked,
+      sendSize: defaultSize.value !== '',
+      sendQuality: defaultQuality.value !== '',
+      sendN: defaultCount.value !== '',
+      responseFormat: responseFormat.value,
       extraBody: parseExtraBody(),
     });
     apiKey.value = '';
@@ -799,9 +820,14 @@ export function createToolPanel({ api, store }) {
   sizeDescription.className = 'stia-muted';
   sizeDescription.textContent = '不同模型支持的尺寸可能不同；若上游拒绝，请换用该模型支持的尺寸或 auto。';
   defaultSizeField.append(sizeDescription);
+  const defaultQualityField = field('默认质量', defaultQuality);
+  const qualityDescription = document.createElement('small');
+  qualityDescription.className = 'stia-muted';
+  qualityDescription.textContent = '标签上的 quality 属性优先于这里；选「不发送」则无论标签写了什么都不发该参数。';
+  defaultQualityField.append(qualityDescription);
   generationGrid.append(
     defaultSizeField,
-    field('默认质量', defaultQuality),
+    defaultQualityField,
     field('默认数量', defaultCount),
   );
   const autoField = field('自动生图', autoGenerate);
@@ -981,9 +1007,6 @@ export function createToolPanel({ api, store }) {
   advancedGrid.className = 'stia-form-grid';
   for (const [labelText, control] of [
     ['允许 HTTP（不安全）', allowHttp],
-    ['发送 size 参数', sendSize],
-    ['发送 quality 参数', sendQuality],
-    ['发送 n 参数', sendN],
   ]) {
     const item = field(labelText, control);
     item.classList.add('stia-field--check');
@@ -994,6 +1017,7 @@ export function createToolPanel({ api, store }) {
     field('模型列表路径', modelsPath),
     field('生图路径', generationPath),
     field('超时（秒）', timeout),
+    field('图片返回格式', responseFormat),
     field('额外请求参数 JSON', extraBody),
     warning,
   );
