@@ -268,6 +268,16 @@ export function createToolPanel({ api, store }) {
   let activeArtistPresetId = '';
   let novelAiConfig = null;
   let openAiExecutionMode = 'direct';
+  let generationSaveHint = null;
+  let generationSaveButton = null;
+
+  function setGenerationParametersDirty(dirty) {
+    if (!generationSaveHint || !generationSaveButton) return;
+    generationSaveHint.textContent = dirty
+      ? '参数已修改，点“保存生图参数”后才会用于下次生图。'
+      : '当前生图参数已保存。';
+    generationSaveButton.classList.toggle('stia-button--primary', dirty);
+  }
 
   function normalizePreview() {
     try {
@@ -333,6 +343,51 @@ export function createToolPanel({ api, store }) {
         ? '已跟随酒馆主题'
         : `已切换为${themeMode.value === 'light' ? '日间' : '夜间'}模式`;
     });
+  });
+
+  async function persistBooleanSetting(control, key, enabledText, disabledText) {
+    const previous = store.state.settings?.[key] === true;
+    const desired = control.checked;
+    control.disabled = true;
+    status.className = 'stia-status';
+    status.textContent = '正在保存…';
+    store.set({ settings: { ...store.state.settings, [key]: desired } });
+    try {
+      const nextSettings = await api.updateSettings({ [key]: desired });
+      control.checked = nextSettings?.[key] ?? desired;
+      store.set({ settings: { ...store.state.settings, ...nextSettings, [key]: control.checked } });
+      status.textContent = control.checked ? enabledText : disabledText;
+    } catch (error) {
+      control.checked = previous;
+      store.set({ settings: { ...store.state.settings, [key]: previous } });
+      status.className = 'stia-status stia-error';
+      status.textContent = `保存失败：${error.message}`;
+    } finally {
+      control.disabled = false;
+    }
+  }
+
+  enabled.addEventListener('change', () => {
+    void persistBooleanSetting(enabled, 'enabled', '扩展已启用', '扩展已关闭');
+  });
+  autoGenerate.addEventListener('change', () => {
+    void persistBooleanSetting(autoGenerate, 'autoGenerate', '自动生图已开启', '自动生图已关闭');
+  });
+  enablePromptOverrideRegenerate.addEventListener('change', () => {
+    void persistBooleanSetting(
+      enablePromptOverrideRegenerate,
+      'enablePromptOverrideRegenerate',
+      '临时修改提示词后重绘已开启',
+      '临时修改提示词后重绘已关闭',
+    );
+  });
+  enableSmartRetry.addEventListener('change', () => {
+    void persistBooleanSetting(
+      enableSmartRetry,
+      'enableSmartRetry',
+      '生成失败后智能重试已开启',
+      '生成失败后智能重试已关闭',
+    );
   });
 
   function updateModelList(models, selectedValue = '') {
@@ -506,6 +561,7 @@ export function createToolPanel({ api, store }) {
       : '当前预设尚未保存密钥';
     updateModelList(preset.cachedModels, preset.selectedModel);
     normalizePreview();
+    setGenerationParametersDirty(false);
   }
 
   function updatePresetSelector(activeId = activePresetId) {
@@ -556,6 +612,27 @@ export function createToolPanel({ api, store }) {
     if (index >= 0) presets[index] = preset;
     else presets.push(preset);
     updatePresetSelector(preset.id);
+    setGenerationParametersDirty(false);
+    return preset;
+  }
+
+  async function saveGenerationParameters() {
+    if (!activePresetId) throw new Error('没有可保存的 API 预设');
+    const previous = presets.find(item => item.id === activePresetId) || {};
+    const preset = await api.updatePreset(activePresetId, {
+      /* 只保存这三个生图参数，避免触碰尚未完成的 URL / Key / 高级 JSON 编辑。 */
+      defaultSize: defaultSize.value || previous.defaultSize || '1024x1024',
+      defaultQuality: defaultQuality.value || previous.defaultQuality || 'auto',
+      defaultCount: Number(defaultCount.value || previous.defaultCount || 1),
+      sendSize: defaultSize.value !== '',
+      sendQuality: defaultQuality.value !== '',
+      sendN: defaultCount.value !== '',
+    });
+    const index = presets.findIndex(item => item.id === preset.id);
+    if (index >= 0) presets[index] = preset;
+    else presets.push(preset);
+    store.set({ preset });
+    setGenerationParametersDirty(false);
     return preset;
   }
 
@@ -817,10 +894,10 @@ export function createToolPanel({ api, store }) {
   generationTitle.innerHTML = '<span aria-hidden="true">▧</span> 生图参数';
   const generationGrid = document.createElement('div');
   generationGrid.className = 'stia-form-grid stia-form-grid--compact';
-  const defaultSizeField = field('默认尺寸', defaultSize);
+  const defaultSizeField = field('默认尺寸（标签未指定 ratio 时）', defaultSize);
   const sizeDescription = document.createElement('small');
   sizeDescription.className = 'stia-muted';
-  sizeDescription.textContent = '不同模型支持的尺寸可能不同；若上游拒绝，请换用该模型支持的尺寸或 auto。';
+  sizeDescription.textContent = '标签上的 ratio 会使用高级设置中对应的比例映射，并优先于这里；选“不发送”则始终不发 size。';
   defaultSizeField.append(sizeDescription);
   const defaultQualityField = field('默认质量', defaultQuality);
   const qualityDescription = document.createElement('small');
@@ -832,12 +909,28 @@ export function createToolPanel({ api, store }) {
     defaultQualityField,
     field('默认数量', defaultCount),
   );
+  generationSaveHint = document.createElement('small');
+  generationSaveHint.className = 'stia-muted';
+  generationSaveButton = action('✓  保存生图参数', async () => run(generationSaveButton, async () => {
+    const preset = await saveGenerationParameters();
+    const sizeText = preset.sendSize === false ? '不发送 size' : preset.defaultSize;
+    const qualityText = preset.sendQuality === false ? '不发送 quality' : preset.defaultQuality;
+    const countText = preset.sendN === false ? '不发送 n' : `${preset.defaultCount} 张`;
+    status.textContent = `生图参数已保存：${sizeText} · ${qualityText} · ${countText}`;
+  }), true);
+  const generationActions = document.createElement('div');
+  generationActions.className = 'stia-actions stia-actions--fill';
+  generationActions.append(generationSaveButton);
+  for (const control of [defaultSize, defaultQuality, defaultCount]) {
+    control.addEventListener('change', () => setGenerationParametersDirty(true));
+  }
+  setGenerationParametersDirty(false);
   const autoField = field('自动生图', autoGenerate);
   autoField.classList.add('stia-switch-field', 'stia-switch-field--row');
   const autoDescription = document.createElement('small');
   autoDescription.textContent = '新消息完成后自动生成图片';
   autoField.querySelector('span')?.append(autoDescription);
-  generationSection.append(generationTitle, generationGrid);
+  generationSection.append(generationTitle, generationGrid, generationSaveHint, generationActions);
 
   const novelAiSection = document.createElement('section');
   novelAiSection.className = 'stia-section stia-section--novelai';

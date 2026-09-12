@@ -194,6 +194,12 @@ export function createGalleryPage(api) {
     announce(next ? '已收藏' : '已取消收藏');
   }
 
+  function toggleSelection(resultId) {
+    if (selectedIds.has(resultId)) selectedIds.delete(resultId);
+    else selectedIds.add(resultId);
+    render();
+  }
+
   function addCard(result) {
     const card = document.createElement('article');
     card.className = 'stia-gallery-card';
@@ -226,7 +232,19 @@ export function createGalleryPage(api) {
     image.src = api.fileUrl(result.resultId);
     image.alt = promptOf(result).slice(0, 100);
     image.loading = 'lazy';
-    makeImageSaveable(image, () => detail(result));
+    makeImageSaveable(image, () => {
+      if (batchMode) {
+        toggleSelection(result.resultId);
+        return;
+      }
+      detail(result);
+    });
+    image.setAttribute(
+      'aria-label',
+      batchMode
+        ? `${selectedIds.has(result.resultId) ? '取消选择' : '选择'}图片 ${result.resultId}`
+        : '查看原图；手机可长按图片保存',
+    );
     const caption = document.createElement('button');
     caption.type = 'button';
     caption.className = 'stia-gallery-card__caption';
@@ -241,9 +259,7 @@ export function createGalleryPage(api) {
     caption.append(model, prompt, time);
     caption.addEventListener('click', () => {
       if (!batchMode) return detail(result);
-      if (selectedIds.has(result.resultId)) selectedIds.delete(result.resultId);
-      else selectedIds.add(result.resultId);
-      render();
+      toggleSelection(result.resultId);
     });
     card.append(cardTools, image, caption);
     grid.append(card);

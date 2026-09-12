@@ -124,6 +124,12 @@ test('批量收藏、取消收藏和删除只作用于当前筛选后选中的�
   search.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
   await new Promise(resolve => setTimeout(resolve, 150));
   click('批量选择');
+  const firstCatImage = page.root.querySelector('[data-result-id="cat-1"] img');
+  firstCatImage.click();
+  assert.equal(buttons().some(value => value.textContent === '已选择 1 张'), true);
+  assert.equal(page.root.querySelector('[data-result-id="cat-1"] input[type="checkbox"]').checked, true);
+  firstCatImage.click();
+  assert.equal(buttons().some(value => value.textContent === '已选择 0 张'), true);
   click('选择当前结果');
   click('批量收藏');
   await settle();
