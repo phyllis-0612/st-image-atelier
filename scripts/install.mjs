@@ -112,7 +112,7 @@ async function main() {
   const uiTarget = path.join(stRoot, 'public', 'scripts', 'extensions', 'third-party', 'st-image-atelier');
   await fs.mkdir(path.dirname(uiTarget), { recursive: true });
   await installUi(uiTarget, options.force);
-  console.log(`Image Atelier 已安装到 SillyTavern ${version}`);
+  console.log(`画笺已安装到 SillyTavern ${version}`);
   console.log(`UI: ${uiTarget}`);
   console.log('运行模式：免服务端直连（默认，无需修改 config.yaml）');
   if (options.withServerPlugin) {

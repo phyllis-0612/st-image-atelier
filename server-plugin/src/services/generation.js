@@ -141,8 +141,7 @@ class GenerationService {
           chatId: tag.chatId,
           messageUuid: tag.messageUuid,
           prompt,
-          promptSnapshot: prompt,
-          resolvedPrompt: prompt,
+          negativePrompt: '',
           provider: 'openai',
           presetId: 'default',
           presetNameSnapshot: preset.name,
@@ -151,7 +150,6 @@ class GenerationService {
           sourceType: source.sourceType,
           status: 'available',
           createdAt: timestamp(),
-          deletedAt: null,
           favorite: false,
           compatibilityRetry: attempt.compatibilityRetry || null,
           schemaVersion: 1,
@@ -173,10 +171,9 @@ class GenerationService {
         const partial = this.metadata.getResult(resultId);
         if (partial?.localRelativePath) {
           await this.storage.remove(partial.localRelativePath).catch(() => {});
-          partial.status = 'deleted';
-          partial.deletedAt = timestamp();
         }
       }
+      const discarded = new Set(attempt.resultIds);
       attempt.resultIds = [];
       const cancelled = controller.signal.aborted;
       const exposed = publicError(error);
@@ -190,6 +187,15 @@ class GenerationService {
       }
       attempt.completedAt = timestamp();
       await this.metadata.transaction(index => {
+        for (const resultId of discarded) delete index.results[resultId];
+        const storedTag = index.tags[tag.tagId];
+        if (storedTag) {
+          storedTag.resultIds = (storedTag.resultIds || [])
+            .filter(resultId => !discarded.has(resultId));
+          if (discarded.has(storedTag.latestResultId)) {
+            storedTag.latestResultId = storedTag.resultIds.at(-1) || null;
+          }
+        }
         index.attempts[attempt.attemptId] = attempt;
       });
     } finally {

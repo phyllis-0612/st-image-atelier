@@ -45,7 +45,7 @@ async function runGalleryCleanup() {
   try {
     return await api.cleanupGallery();
   } catch (error) {
-    console.warn('[Image Atelier] 画廊自动清理检查失败', error);
+    console.warn('[画笺] 画廊自动清理检查失败', error);
     return null;
   }
 }
@@ -212,7 +212,7 @@ async function removeTag(tag) {
   try {
     await compat.save();
   } catch (error) {
-    console.error('[Image Atelier] 删除生图标签后无法保存聊天', error);
+    console.error('[画笺] 删除生图标签后无法保存聊天', error);
   }
   await events.processMessage(messageId, { live: false });
   return true;

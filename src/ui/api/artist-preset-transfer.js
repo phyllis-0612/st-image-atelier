@@ -63,7 +63,7 @@ export function parseArtistPresetImport(payload) {
   if (!Array.isArray(payload)
     && payload.format
     && payload.format !== ARTIST_PRESET_EXPORT_FORMAT) {
-    throw new Error('这不是 Image Atelier 画师串分享文件');
+    throw new Error('这不是画笺的画师串分享文件');
   }
   if (!Array.isArray(payload)
     && payload.format === ARTIST_PRESET_EXPORT_FORMAT
@@ -73,7 +73,7 @@ export function parseArtistPresetImport(payload) {
   if (!Array.isArray(payload)
     && payload.format === ARTIST_PRESET_EXPORT_FORMAT
     && Number(payload.version) > ARTIST_PRESET_EXPORT_VERSION) {
-    throw new Error('该分享文件来自更高版本，请先更新 Image Atelier');
+    throw new Error('该分享文件来自更高版本，请先更新画笺');
   }
 
   const candidates = Array.isArray(payload)

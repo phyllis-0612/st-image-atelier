@@ -16,6 +16,10 @@ import {
 } from './openai-direct.js';
 import { generateNovelAiImages } from './novelai-direct.js';
 import {
+  createSillyTavernGalleryMetadataStore,
+  normalizeGalleryRecord,
+} from './gallery-metadata-store.js';
+import {
   createArtistPresetExport,
   parseArtistPresetImport,
 } from './artist-preset-transfer.js';
@@ -27,6 +31,15 @@ const API_KEY_STORAGE_PREFIX = 'stImageAtelier.directApiKey.v2:';
 const NOVELAI_KEY_STORAGE = 'stImageAtelier.novelAiApiKey.v1';
 const ACTIVE_STATUSES = new Set(['queued', 'generating', 'downloading', 'saving']);
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'interrupted', 'cancelled']);
+const NAMESPACE_KEYS = new Set([
+  'settings',
+  'presets',
+  'artistPresets',
+  'novelAi',
+  'activePresetId',
+  'activeArtistPresetId',
+  'schemaVersion',
+]);
 
 function clone(value) {
   return typeof structuredClone === 'function'
@@ -108,23 +121,13 @@ function normalizeSettings(value = {}) {
 }
 
 export function normalizeGalleryResult(value = {}) {
-  const promptSnapshot = String(value.promptSnapshot || value.prompt || value.resolvedPrompt || '');
-  const provider = value.provider === 'novelai'
-    || value.presetId === 'novelai'
-    || value.artistPresetId
-    ? 'novelai'
-    : 'openai';
-  return {
-    ...value,
-    promptSnapshot,
-    favorite: value.favorite === true,
-    provider,
-  };
+  return normalizeGalleryRecord(value);
 }
 
 function ensureNamespace(extensionSettings) {
   const previous = extensionSettings[MODULE_NAME];
   const namespace = previous && typeof previous === 'object' ? previous : {};
+  const legacyGallery = Array.isArray(namespace.gallery) ? clone(namespace.gallery) : [];
   namespace.settings = normalizeSettings(namespace.settings);
   const sourcePresets = Array.isArray(namespace.presets) && namespace.presets.length
     ? namespace.presets
@@ -155,15 +158,8 @@ function ensureNamespace(extensionSettings) {
     .some(item => item.id === namespace.activeArtistPresetId)
     ? namespace.activeArtistPresetId
     : namespace.artistPresets[0].id;
-  namespace.gallery = Array.isArray(namespace.gallery)
-    ? namespace.gallery.map(normalizeGalleryResult)
-    : [];
-  namespace.deletedResultIds = Array.isArray(namespace.deletedResultIds)
-    ? namespace.deletedResultIds
-    : [];
-  namespace.schemaVersion = SCHEMA_VERSION;
   extensionSettings[MODULE_NAME] = namespace;
-  return namespace;
+  return { namespace, legacyGallery };
 }
 
 function maskKey(value) {
@@ -191,12 +187,15 @@ export function createDirectApiClient({
   extensionSettings,
   saveSettingsDebounced,
   keyStorage = globalThis.localStorage,
+  galleryStore,
 }) {
-  const namespace = ensureNamespace(extensionSettings);
+  const { namespace, legacyGallery } = ensureNamespace(extensionSettings);
+  const metadataStore = galleryStore || createSillyTavernGalleryMetadataStore(compat);
   const controllers = new Map();
-  const resultIndex = new Map(namespace.gallery.map(result => [result.resultId, result]));
+  const resultIndex = new Map();
   const memoryKeys = new Map();
   let cleanupPromise = null;
+  let galleryReadyPromise = null;
 
   function presetById(presetId = namespace.activePresetId) {
     return namespace.presets.find(item => item.id === presetId) || null;
@@ -276,7 +275,31 @@ export function createDirectApiClient({
     };
   }
 
+  async function ensureGalleryReady() {
+    if (galleryReadyPromise) return galleryReadyPromise;
+    galleryReadyPromise = (async () => {
+      await metadataStore.initialize({
+        legacyItems: legacyGallery,
+      });
+      resultIndex.clear();
+      for (const result of metadataStore.values()) resultIndex.set(result.resultId, result);
+      for (const key of Object.keys(namespace)) {
+        if (!NAMESPACE_KEYS.has(key)) delete namespace[key];
+      }
+      namespace.schemaVersion = SCHEMA_VERSION;
+      await Promise.resolve(saveSettingsDebounced?.());
+      return metadataStore;
+    })();
+    try {
+      return await galleryReadyPromise;
+    } catch (error) {
+      galleryReadyPromise = null;
+      throw error;
+    }
+  }
+
   async function savePreferences() {
+    await ensureGalleryReady();
     await Promise.resolve(saveSettingsDebounced?.());
   }
 
@@ -292,15 +315,9 @@ export function createDirectApiClient({
   function stateOf(tagId) {
     const found = findTag(tagId);
     if (!found) return { tagId, tag: null, attempts: [], results: [] };
-    const deleted = new Set(namespace.deletedResultIds);
-    const results = (found.tag.results || []).map(result => {
-      const normalized = normalizeGalleryResult(result);
-      Object.assign(result, normalized);
-      const next = deleted.has(result.resultId) ? { ...normalized, status: 'deleted' } : normalized;
-      resultIndex.set(next.resultId, next);
-      return next;
-    });
-    const resultIds = results.filter(result => result.status === 'available').map(result => result.resultId);
+    const resultIds = [...new Set(found.tag.resultIds || [])]
+      .filter(resultId => resultIndex.has(resultId));
+    const results = resultIds.map(resultId => resultIndex.get(resultId));
     const latestResultId = resultIds.includes(found.tag.latestResultId)
       ? found.tag.latestResultId
       : resultIds.at(-1) || null;
@@ -411,10 +428,7 @@ export function createDirectApiClient({
       chatId: input.chatId,
       messageUuid: input.messageUuid,
       prompt: input.prompt,
-      promptSnapshot: attempt.promptSnapshot || input.prompt,
-      resolvedPrompt: attempt.resolvedPrompt || input.prompt,
-      negativePromptSnapshot: attempt.negativePromptSnapshot || '',
-      resolvedNegativePrompt: attempt.resolvedNegativePrompt || '',
+      negativePrompt: attempt.negativePromptSnapshot || '',
       provider: attempt.provider || 'openai',
       presetId: attempt.presetId,
       presetNameSnapshot: attempt.presetNameSnapshot,
@@ -431,7 +445,6 @@ export function createDirectApiClient({
       status: 'available',
       storageMode: 'direct',
       createdAt: now(),
-      deletedAt: null,
       favorite: false,
       compatibilityRetry: attempt.compatibilityRetry || null,
       schemaVersion: SCHEMA_VERSION,
@@ -448,10 +461,9 @@ export function createDirectApiClient({
   }
 
   async function resolveTags(tagIds) {
+    await ensureGalleryReady();
     const values = [];
     let changed = false;
-    let galleryChanged = false;
-    const deleted = new Set(namespace.deletedResultIds);
     for (const tagId of tagIds) {
       const found = findTag(tagId);
       if (found) {
@@ -464,29 +476,27 @@ export function createDirectApiClient({
             changed = true;
           }
         }
-        for (const result of found.tag.results || []) {
-          if (deleted.has(result.resultId) && result.status !== 'deleted') {
-            result.status = 'deleted';
-            result.deletedAt ||= now();
-            found.tag.autoSuppressed = true;
-            changed = true;
-          }
-          if (result.status === 'available'
-            && !namespace.gallery.some(item => item.resultId === result.resultId)) {
-            namespace.gallery.push(clone(result));
-            resultIndex.set(result.resultId, result);
-            galleryChanged = true;
-          }
+        if (Object.hasOwn(found.tag, 'results')) {
+          delete found.tag.results;
+          changed = true;
+        }
+        const availableIds = [...new Set(found.tag.resultIds || [])]
+          .filter(resultId => resultIndex.has(resultId));
+        if (JSON.stringify(availableIds) !== JSON.stringify(found.tag.resultIds || [])) changed = true;
+        found.tag.resultIds = availableIds;
+        if (!availableIds.includes(found.tag.latestResultId)) {
+          found.tag.latestResultId = availableIds.at(-1) || null;
+          changed = true;
         }
       }
       values.push(stateOf(tagId));
     }
     if (changed) await compat.save();
-    if (galleryChanged) await savePreferences();
     return values;
   }
 
   async function generate(input) {
+    await ensureGalleryReady();
     let found = findTag(input.tagId);
     if (!found) throw new DirectError('VALIDATION_FAILED', '找不到对应的生图标签');
     const existing = found.tag.attempts?.find(item => item.attemptId === input.attemptId);
@@ -592,23 +602,32 @@ export function createDirectApiClient({
 
       attempt.status = 'saving';
       found = await persistAttempt(found, attempt);
+      const normalizedSaved = await metadataStore.putMany(saved);
+      saved.splice(0, saved.length, ...normalizedSaved);
       found = findTag(input.tagId) || found;
-      found.tag.results ??= [];
-      found.tag.results.push(...saved);
-      found.tag.resultIds = found.tag.results
-        .filter(result => result.status === 'available')
-        .map(result => result.resultId);
+      delete found.tag.results;
+      found.tag.resultIds = [...new Set([
+        ...(found.tag.resultIds || []).filter(resultId => resultIndex.has(resultId)),
+        ...saved.map(result => result.resultId),
+      ])];
       found.tag.latestResultId = saved.at(-1)?.resultId || found.tag.latestResultId || null;
-      namespace.gallery.push(...saved);
       for (const result of saved) resultIndex.set(result.resultId, result);
       attempt.status = 'succeeded';
       attempt.resultIds = saved.map(result => result.resultId);
       attempt.completedAt = now();
       found = await persistAttempt(found, attempt);
-      await savePreferences();
       return clone(attempt);
     } catch (error) {
       await Promise.allSettled(saved.map(removeFile));
+      await metadataStore.removeMany(saved.map(result => result.resultId)).catch(() => {});
+      for (const result of saved) resultIndex.delete(result.resultId);
+      if (found?.tag) {
+        const discarded = new Set(saved.map(result => result.resultId));
+        found.tag.resultIds = (found.tag.resultIds || []).filter(resultId => !discarded.has(resultId));
+        if (discarded.has(found.tag.latestResultId)) {
+          found.tag.latestResultId = found.tag.resultIds.at(-1) || null;
+        }
+      }
       const cancelled = controller.signal.aborted;
       attempt.status = cancelled ? 'cancelled' : 'failed';
       attempt.errorCode = cancelled ? null : (error.code || 'UPSTREAM_HTTP_ERROR');
@@ -642,10 +661,9 @@ export function createDirectApiClient({
   }
 
   async function gallery({ cursor, limit = 30 } = {}) {
+    await ensureGalleryReady();
     const start = Math.max(0, Number.parseInt(cursor || '0', 10) || 0);
-    const items = namespace.gallery
-      .filter(result => result.status === 'available'
-        && !namespace.deletedResultIds.includes(result.resultId))
+    const items = metadataStore.values()
       .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
     const page = items.slice(start, start + limit);
     page.forEach(result => resultIndex.set(result.resultId, result));
@@ -656,9 +674,8 @@ export function createDirectApiClient({
   }
 
   async function galleryMetadata() {
-    const items = namespace.gallery
-      .filter(result => result.status === 'available'
-        && !namespace.deletedResultIds.includes(result.resultId))
+    await ensureGalleryReady();
+    const items = metadataStore.values()
       .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
     items.forEach(result => {
       Object.assign(result, normalizeGalleryResult(result));
@@ -668,51 +685,37 @@ export function createDirectApiClient({
   }
 
   async function setFavorite(resultId, favorite) {
-    const galleryResult = namespace.gallery.find(item => item.resultId === resultId);
-    const indexedResult = resultIndex.get(resultId);
-    const result = galleryResult || indexedResult;
+    await ensureGalleryReady();
+    const result = resultIndex.get(resultId);
     if (!result || result.status !== 'available') {
       throw new DirectError('VALIDATION_FAILED', '找不到图片');
     }
-    result.favorite = favorite === true;
-    if (indexedResult && indexedResult !== result) indexedResult.favorite = result.favorite;
-    resultIndex.set(resultId, result);
-    const found = findTag(result.tagId);
-    const messageResult = found?.tag?.results?.find(item => item.resultId === resultId);
-    if (messageResult) messageResult.favorite = result.favorite;
-    if (found) await compat.save();
-    await savePreferences();
-    return clone(normalizeGalleryResult(result));
+    const updated = await metadataStore.update(resultId, { favorite: favorite === true });
+    resultIndex.set(resultId, updated);
+    return clone(updated);
   }
 
   async function deleteResult(resultId) {
-    const galleryResult = namespace.gallery.find(item => item.resultId === resultId);
-    const indexedResult = resultIndex.get(resultId);
-    const result = galleryResult || indexedResult;
+    await ensureGalleryReady();
+    const result = resultIndex.get(resultId);
     if (!result) throw new DirectError('VALIDATION_FAILED', '找不到图片');
     await removeFile(result);
-    result.status = 'deleted';
-    result.deletedAt = now();
-    if (indexedResult && indexedResult !== result) {
-      indexedResult.status = 'deleted';
-      indexedResult.deletedAt = result.deletedAt;
-    }
-    if (!namespace.deletedResultIds.includes(resultId)) namespace.deletedResultIds.push(resultId);
+    await metadataStore.remove(resultId);
+    resultIndex.delete(resultId);
     const found = findTag(result.tagId);
     if (found) {
-      const messageResult = found.tag.results?.find(item => item.resultId === resultId);
-      if (messageResult) Object.assign(messageResult, { status: 'deleted', deletedAt: result.deletedAt });
+      delete found.tag.results;
       found.tag.resultIds = (found.tag.resultIds || []).filter(id => id !== resultId);
       found.tag.latestResultId = found.tag.resultIds.at(-1) || null;
       found.tag.autoSuppressed = true;
       await compat.save();
     }
-    await savePreferences();
     return { resultId, status: 'deleted' };
   }
 
   async function performGalleryCleanup() {
-    const selection = selectCleanupCandidates(namespace.gallery, namespace.settings);
+    await ensureGalleryReady();
+    const selection = selectCleanupCandidates(metadataStore.values(), namespace.settings);
     if (!selection.settings.galleryCleanupByAge && !selection.settings.galleryCleanupByCount) {
       return {
         enabled: false,
@@ -722,42 +725,32 @@ export function createDirectApiClient({
         keptCount: selection.availableCount,
         byAgeCount: 0,
         byCountCount: 0,
-        deletedResultIds: [],
+        deletedIds: [],
       };
     }
 
-    const deletedResultIds = [];
+    const deletedIds = [];
     const affectedTags = new Set();
     for (const result of selection.candidates) {
       try {
         await removeFile(result);
       } catch (error) {
-        console.warn('[Image Atelier] 自动清理图片失败', result.resultId, error);
+        console.warn('[画笺] 自动清理图片失败', result.resultId, error);
         continue;
       }
-      result.status = 'deleted';
-      result.deletedAt = now();
-      if (!namespace.deletedResultIds.includes(result.resultId)) {
-        namespace.deletedResultIds.push(result.resultId);
-      }
-      deletedResultIds.push(result.resultId);
+      deletedIds.push(result.resultId);
       affectedTags.add(result.tagId);
     }
 
+    await metadataStore.removeMany(deletedIds);
+    for (const resultId of deletedIds) resultIndex.delete(resultId);
+
     let chatChanged = false;
-    const deleted = new Set(deletedResultIds);
+    const deleted = new Set(deletedIds);
     for (const tagId of affectedTags) {
       const found = findTag(tagId);
       if (!found) continue;
-      for (const messageResult of found.tag.results || []) {
-        if (!deleted.has(messageResult.resultId)) continue;
-        const galleryResult = namespace.gallery
-          .find(item => item.resultId === messageResult.resultId);
-        Object.assign(messageResult, {
-          status: 'deleted',
-          deletedAt: galleryResult?.deletedAt || now(),
-        });
-      }
+      delete found.tag.results;
       found.tag.resultIds = (found.tag.resultIds || [])
         .filter(resultId => !deleted.has(resultId));
       found.tag.latestResultId = found.tag.resultIds.at(-1) || null;
@@ -765,17 +758,16 @@ export function createDirectApiClient({
       chatChanged = true;
     }
     if (chatChanged) await compat.save();
-    if (deletedResultIds.length) await savePreferences();
 
     return {
       enabled: true,
       candidateCount: selection.candidates.length,
-      deletedCount: deletedResultIds.length,
-      failedCount: selection.candidates.length - deletedResultIds.length,
-      keptCount: selection.availableCount - deletedResultIds.length,
+      deletedCount: deletedIds.length,
+      failedCount: selection.candidates.length - deletedIds.length,
+      keptCount: selection.availableCount - deletedIds.length,
       byAgeCount: selection.byAgeCount,
       byCountCount: selection.byCountCount,
-      deletedResultIds,
+      deletedIds,
     };
   }
 
@@ -788,8 +780,7 @@ export function createDirectApiClient({
   }
 
   function fileUrl(resultId) {
-    const result = resultIndex.get(resultId)
-      || namespace.gallery.find(item => item.resultId === resultId);
+    const result = resultIndex.get(resultId);
     return normalizePath(result?.localRelativePath);
   }
 
@@ -797,11 +788,14 @@ export function createDirectApiClient({
     mode: () => namespace.settings.executionMode || 'direct',
     health: async () => ({
       mode: 'direct',
-      version: '1.6.1',
+      version: '1.6.3',
       corsRequired: true,
       storage: 'sillytavern-images',
     }),
-    getSettings: async () => clone(namespace.settings),
+    getSettings: async () => {
+      await ensureGalleryReady();
+      return clone(namespace.settings);
+    },
     updateSettings: async patch => {
       namespace.settings = normalizeSettings({
         ...namespace.settings,
@@ -1055,7 +1049,6 @@ export function createDirectApiClient({
     setFavorite,
     fileUrl,
     downloadUrl: fileUrl,
-    hasResult: resultId => resultIndex.has(resultId)
-      || namespace.gallery.some(item => item.resultId === resultId),
+    hasResult: resultId => resultIndex.has(resultId),
   };
 }

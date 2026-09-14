@@ -126,7 +126,7 @@ export function openImageViewer(options, environment = {}) {
           safeFilename(options.filename, extensionForMime(blob.type)),
           { type: blob.type || 'image/png' },
         );
-        const payload = { files: [file], title: 'Image Atelier 原图' };
+        const payload = { files: [file], title: '画笺原图' };
         if (typeof navigatorRef.canShare === 'function' && !navigatorRef.canShare(payload)) {
           throw new Error('当前浏览器不支持分享图片文件');
         }

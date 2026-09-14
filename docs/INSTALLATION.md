@@ -13,7 +13,7 @@
    ```
 
 4. 安装后刷新页面或重启酒馆。
-5. 打开「✦ Image Atelier」，确认状态为「免服务端模式已就绪」。
+5. 打开「✦ 画笺」，确认状态为「免服务端模式已就绪」。
 
 该方式只安装标准 UI Extension，不修改 `config.yaml`，也不要求 `enableServerPlugins`。
 
@@ -31,13 +31,15 @@
 
 升级到 1.6.0 时会自动补齐临时提示词重绘、智能重试、收藏和提示词快照字段。两个新开关默认关闭，旧画廊记录默认未收藏；无需清空扩展设置或历史图片。
 
+升级到 1.6.2 或更高版本时，首次加载会先把旧 `extension_settings.stImageAtelier.gallery` 中的可用记录写入当前用户的 `st-image-atelier-gallery.json`，写入成功后再移除旧画廊与删除墓碑。提示词三份重复字段会合并为一份；已有图片与收藏不受影响。
+
 ## 免服务端模式说明
 
 - 生成：浏览器直接调用 OpenAI Images 兼容端点。
 - 存图：使用 SillyTavern 自带的 `/api/images/upload`。
 - 删除：使用 SillyTavern 自带的 `/api/images/delete`。
 - 卡片状态：保存在 `message.extra.stImageAtelier`。
-- 画廊索引：保存在当前用户的扩展设置中。
+- 画廊索引：通过 SillyTavern `/api/files` 保存在当前用户的独立 `st-image-atelier-gallery.json` 中。
 - API Key：保存在当前 SillyTavern 账户的前端账户存储中。
 
 中转站必须支持 CORS。Base URL 是 HTTPS 时无需额外设置；HTTP 默认禁止，只应在可信本地网络中手动开启。

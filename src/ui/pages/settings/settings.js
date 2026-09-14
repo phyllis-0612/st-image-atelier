@@ -102,11 +102,11 @@ export function createToolPanel({ api, store }) {
   panel.className = 'stia-panel';
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-modal', 'true');
-  panel.setAttribute('aria-label', 'Image Atelier 工具窗口');
+  panel.setAttribute('aria-label', '画笺工具窗口');
 
   const header = document.createElement('header');
   const heading = document.createElement('h2');
-  heading.textContent = 'Image Atelier';
+  heading.textContent = '画笺';
   const health = document.createElement('span');
   health.className = 'stia-health';
   health.textContent = '正在连接…';
@@ -1072,7 +1072,7 @@ export function createToolPanel({ api, store }) {
   );
   const cleanupNotice = document.createElement('p');
   cleanupNotice.className = 'stia-warning';
-  cleanupNotice.textContent = '两项可单独或同时启用；同时启用时，任一规则命中的旧图片都会被永久删除。仅清理 Image Atelier 自己登记的图片，不会触碰酒馆或其他扩展的图片。';
+  cleanupNotice.textContent = '两项可单独或同时启用；同时启用时，任一规则命中的旧图片都会被永久删除。仅清理画笺自己登记的图片，不会触碰酒馆或其他扩展的图片。';
   const saveMaintenance = action('✓  保存规则并立即检查', async () => {
     if ((cleanupByAge.checked || cleanupByCount.checked)
       && !confirm('保存后会立即按规则永久删除旧图片，且无法撤销。确定继续吗？')) return;

@@ -157,7 +157,7 @@ export function createGalleryPage(api) {
   }
 
   function promptOf(result) {
-    return result.promptSnapshot || result.prompt || result.resolvedPrompt || '';
+    return result.prompt || '';
   }
 
   async function removeResult(result, { ask = true } = {}) {
@@ -316,7 +316,7 @@ export function createGalleryPage(api) {
     try {
       if (reset) {
         await api.cleanupGallery().catch(error => {
-          console.warn('[Image Atelier] 打开画廊时自动清理失败', error);
+          console.warn('[画笺] 打开画廊时自动清理失败', error);
         });
       }
       const data = await api.galleryMetadata();

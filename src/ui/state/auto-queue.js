@@ -11,7 +11,7 @@ export function createAutoQueue(generate) {
       try {
         await generate(tag, 'auto');
       } catch (error) {
-        console.warn('[Image Atelier] 自动生图失败，不会自动重试', error);
+        console.warn('[画笺] 自动生图失败，不会自动重试', error);
       } finally {
         pending.delete(tag.tagId);
       }

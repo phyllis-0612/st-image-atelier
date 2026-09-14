@@ -46,20 +46,20 @@ class GalleryService {
     const now = new Date().toISOString();
     await this.metadata.transaction(index => {
       const nextResult = index.results[resultId];
-      nextResult.status = 'deleted';
-      nextResult.deletedAt = now;
       const tag = index.tags[nextResult.tagId];
+      delete index.results[resultId];
       if (tag) {
         tag.autoSuppressed = true;
+        tag.resultIds = (tag.resultIds || []).filter(id => id !== resultId);
         const available = tag.resultIds
           .map(id => index.results[id])
-          .filter(item => item?.status === 'available')
+          .filter(Boolean)
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
         tag.latestResultId = available[0]?.resultId || null;
         tag.updatedAt = now;
       }
     });
-    return this.metadata.getResult(resultId);
+    return { resultId, status: 'deleted' };
   }
 
   async setFavorite(resultId, favorite) {
@@ -89,30 +89,29 @@ class GalleryService {
         keptCount: selection.availableCount,
         byAgeCount: 0,
         byCountCount: 0,
-        deletedResultIds: [],
+        deletedIds: [],
       };
     }
 
-    const deletedResultIds = [];
+    const deletedIds = [];
     for (const result of selection.candidates) {
       try {
         await this.storage.remove(result.localRelativePath);
-        deletedResultIds.push(result.resultId);
+        deletedIds.push(result.resultId);
       } catch (error) {
-        console.warn('[Image Atelier] 自动清理图片失败', result.resultId, error);
+        console.warn('[画笺] 自动清理图片失败', result.resultId, error);
       }
     }
-    if (deletedResultIds.length) {
-      const deleted = new Set(deletedResultIds);
+    if (deletedIds.length) {
+      const deleted = new Set(deletedIds);
       const timestamp = new Date().toISOString();
       await this.metadata.transaction(index => {
         const affectedTags = new Set();
         for (const resultId of deleted) {
           const result = index.results[resultId];
-          if (!result || result.status !== 'available') continue;
-          result.status = 'deleted';
-          result.deletedAt = timestamp;
+          if (!result) continue;
           affectedTags.add(result.tagId);
+          delete index.results[resultId];
         }
         for (const tagId of affectedTags) {
           const tag = index.tags[tagId];
@@ -132,12 +131,12 @@ class GalleryService {
     return {
       enabled: true,
       candidateCount: selection.candidates.length,
-      deletedCount: deletedResultIds.length,
-      failedCount: selection.candidates.length - deletedResultIds.length,
-      keptCount: selection.availableCount - deletedResultIds.length,
+      deletedCount: deletedIds.length,
+      failedCount: selection.candidates.length - deletedIds.length,
+      keptCount: selection.availableCount - deletedIds.length,
       byAgeCount: selection.byAgeCount,
       byCountCount: selection.byCountCount,
-      deletedResultIds,
+      deletedIds,
     };
   }
 }

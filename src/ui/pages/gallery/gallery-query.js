@@ -1,27 +1,34 @@
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function normalizeGalleryItem(value = {}) {
+  const {
+    promptSnapshot,
+    resolvedPrompt,
+    negativePromptSnapshot,
+    resolvedNegativePrompt,
+    ...rest
+  } = value;
   const provider = value.provider === 'novelai'
     || value.presetId === 'novelai'
     || value.artistPresetId
     ? 'novelai'
     : 'openai';
   return {
-    ...value,
+    ...rest,
     provider,
     favorite: value.favorite === true,
-    promptSnapshot: String(value.promptSnapshot || value.prompt || value.resolvedPrompt || ''),
+    prompt: String(promptSnapshot || value.prompt || resolvedPrompt || ''),
+    negativePrompt: String(
+      negativePromptSnapshot || value.negativePrompt || resolvedNegativePrompt || '',
+    ),
   };
 }
 
 export function gallerySearchText(value) {
   const item = normalizeGalleryItem(value);
   return [
-    item.promptSnapshot,
     item.prompt,
-    item.resolvedPrompt,
-    item.negativePromptSnapshot,
-    item.resolvedNegativePrompt,
+    item.negativePrompt,
     item.apiModel,
     item.presetNameSnapshot,
     item.artistPresetNameSnapshot,

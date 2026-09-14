@@ -1,7 +1,7 @@
 export const MODULE_NAME = 'stImageAtelier';
-export const DISPLAY_NAME = 'Image Atelier';
+export const DISPLAY_NAME = '画笺';
 export const API_ROOT = '/api/plugins/st-image-atelier';
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export const ATTEMPT_STATUS = Object.freeze({
   IDLE: 'idle',
@@ -90,6 +90,7 @@ export const DEFAULT_ARTIST_PRESET = Object.freeze({
   id: 'default',
   name: '默认画师串',
   prompt: '',
+  negativePrompt: '',
   schemaVersion: 1
 });
 

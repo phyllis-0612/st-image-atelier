@@ -31,7 +31,7 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
       try {
         await compat.save();
       } catch (error) {
-        console.error('[Image Atelier] 无法保存标签元数据', error);
+        console.error('[画笺] 无法保存标签元数据', error);
       }
     }
 
@@ -89,7 +89,7 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
     const timer = setTimeout(() => {
       scheduled.delete(id);
       void processMessage(id, mergedOptions).catch(error => {
-        console.error('[Image Atelier] 实时识别生图标签失败', error);
+        console.error('[画笺] 实时识别生图标签失败', error);
       });
     }, DOM_SETTLE_MS);
     scheduled.set(id, { timer, options: mergedOptions });

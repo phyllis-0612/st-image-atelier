@@ -1,4 +1,4 @@
-# Image Atelier 第一期任务状态
+# 画笺第一期任务状态
 
 - [x] A：环境与 1.14–1.18 官方 tag 勘察
 - [x] B：UI Extension / Server Plugin 骨架与健康检查

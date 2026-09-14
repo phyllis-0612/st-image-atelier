@@ -77,7 +77,7 @@ export function createCard({
   const root = document.createElement('section');
   root.className = 'stia-card';
   root.dataset.tagId = tag.tagId;
-  root.setAttribute('aria-label', 'Image Atelier 生图卡片');
+  root.setAttribute('aria-label', '画笺生图卡片');
 
   /* 一键删除：卡片、消息里的 <draw> 注入词、标签元数据一起清掉，不留痕迹。
      只在失败和待生成两种状态提供；已出图的走画廊删除，生成中的先取消。 */
@@ -91,12 +91,13 @@ export function createCard({
     const available = (state.results || []).filter(result => result.status === 'available');
     const latest = available.find(result => result.resultId === state.tag?.latestResultId)
       || available.at(-1);
-    const actualPrompt = latest?.promptSnapshot
-      || latest?.prompt
+    const actualPrompt = latest?.prompt
+      || latest?.promptSnapshot
       || attempt?.promptSnapshot
       || attempt?.resolvedPrompt
       || tag.prompt;
-    const actualNegativePrompt = latest?.negativePromptSnapshot
+    const actualNegativePrompt = latest?.negativePrompt
+      || latest?.negativePromptSnapshot
       || attempt?.negativePromptSnapshot
       || '';
     const canAdjust = getSettings()?.enablePromptOverrideRegenerate === true

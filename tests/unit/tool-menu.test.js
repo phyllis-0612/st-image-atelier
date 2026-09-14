@@ -82,7 +82,7 @@ test('入口只挂载到左下角魔法棒菜单并可打开面板', () => {
   assert.equal(doc.extensionsSettings.children.length, 0);
   assert.match(entry.className, /list-group-item/);
   assert.equal(entry.children[0].className, 'fa-solid fa-wand-magic-sparkles');
-  assert.equal(entry.children[1].textContent, 'Image Atelier');
+  assert.equal(entry.children[1].textContent, '画笺');
 
   entry.fire('click');
   entry.fire('keydown', 'Escape');

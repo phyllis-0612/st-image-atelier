@@ -35,7 +35,7 @@ async function verifySource(root, includeServer = false) {
   }
   await Promise.all(files.map(file => must(path.join(root, file))));
   const manifest = JSON.parse(await fs.readFile(path.join(root, 'manifest.json'), 'utf8'));
-  if (manifest.display_name !== 'Image Atelier'
+  if (manifest.display_name !== '画笺'
     || manifest.minimum_client_version !== '1.14.0'
     || manifest.homePage !== 'https://github.com/phyllis-0612/st-image-atelier'
     || manifest.auto_update !== true) {

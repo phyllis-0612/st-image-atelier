@@ -95,7 +95,7 @@ test('服务器模式临时提示词只改本次请求与结果快照，不改�
   assert.equal(attempt.status, 'succeeded');
   assert.equal(f.upstream.state.generationBodies.at(-1).prompt, 'temporary changed prompt');
   assert.equal(f.metadata.getTag(first.tagId).prompt, originalTagPrompt);
-  assert.equal(f.metadata.getResult(attempt.resultIds[0]).promptSnapshot, 'temporary changed prompt');
+  assert.equal(f.metadata.getResult(attempt.resultIds[0]).prompt, 'temporary changed prompt');
 });
 
 test('服务器模式收藏状态持久化，并保护收藏图片不被自动清理', async t => {
@@ -271,11 +271,53 @@ test('metadata 丢失时可从 images 目录重建画廊索引', async t => {
   assert.equal(store.getResult(resultId).status, 'available');
   assert.equal(store.getResult(resultId).recovered, true);
   assert.equal(store.getResult(resultId).favorite, false);
-  assert.equal(store.getResult(resultId).promptSnapshot, '从本地图片目录恢复的记录');
+  assert.equal(store.getResult(resultId).prompt, '从本地图片目录恢复的记录');
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 }));
 });
 
-test('画廊删除移除文件并保留墓碑与 autoSuppressed', async t => {
+test('服务端旧画廊迁移为真删记录与单份提示词', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'stia-metadata-migrate-'));
+  const metadataDirectory = path.join(root, 'metadata');
+  await fs.mkdir(metadataDirectory, { recursive: true });
+  const keptId = crypto.randomUUID();
+  const deletedId = crypto.randomUUID();
+  const tagId = crypto.randomUUID();
+  await fs.writeFile(path.join(metadataDirectory, 'index.json'), JSON.stringify({
+    schemaVersion: 2,
+    tags: {
+      [tagId]: { tagId, resultIds: [keptId, deletedId], latestResultId: deletedId },
+    },
+    attempts: {},
+    results: {
+      [keptId]: {
+        resultId: keptId,
+        tagId,
+        status: 'available',
+        prompt: 'base',
+        promptSnapshot: 'actual prompt',
+        resolvedPrompt: 'resolved prompt',
+      },
+      [deletedId]: {
+        resultId: deletedId,
+        tagId,
+        status: 'deleted',
+        prompt: 'deleted prompt',
+        deletedAt: new Date().toISOString(),
+      },
+    },
+  }));
+  const store = await new MetadataStore(root).initialize();
+  assert.equal(store.index.schemaVersion, 3);
+  assert.equal(store.getResult(deletedId), null);
+  assert.equal(store.getResult(keptId).prompt, 'actual prompt');
+  assert.equal('promptSnapshot' in store.getResult(keptId), false);
+  assert.equal('resolvedPrompt' in store.getResult(keptId), false);
+  assert.deepEqual(store.getTag(tagId).resultIds, [keptId]);
+  assert.equal(store.getTag(tagId).latestResultId, keptId);
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 }));
+});
+
+test('画廊删除移除文件与元数据并保留 autoSuppressed', async t => {
   const f = await fixture(t);
   const input = request('base64');
   await f.generation.generate(input);
@@ -284,7 +326,7 @@ test('画廊删除移除文件并保留墓碑与 autoSuppressed', async t => {
   const file = f.storage.resolve(f.metadata.getResult(resultId).localRelativePath);
   await f.gallery.delete(resultId);
   await assert.rejects(fs.stat(file), error => error.code === 'ENOENT');
-  assert.equal(f.metadata.getResult(resultId).status, 'deleted');
+  assert.equal(f.metadata.getResult(resultId), null);
   assert.equal(f.metadata.getTag(input.tagId).autoSuppressed, true);
 });
 
@@ -347,7 +389,7 @@ test('服务端画廊按时间和数量规则自动清理最旧图片', async t 
   }
   for (const file of keptFiles) assert.ok((await fs.stat(file)).size > 0);
   for (const item of generated.slice(0, 2)) {
-    assert.equal(f.metadata.getResult(item.resultId).status, 'deleted');
+    assert.equal(f.metadata.getResult(item.resultId), null);
     assert.equal(f.metadata.getTag(item.input.tagId).autoSuppressed, true);
   }
 });

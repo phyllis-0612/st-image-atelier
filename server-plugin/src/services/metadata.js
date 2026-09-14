@@ -6,7 +6,7 @@ const { readJson, atomicWriteJson } = require('../utils/atomic-json');
 
 function emptyIndex() {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     tags: {},
     attempts: {},
     results: {},
@@ -44,10 +44,27 @@ class MetadataStore {
       if (recovered > 0) await this.persist();
     }
     let changed = false;
-    for (const result of Object.values(this.index.results)) {
-      const promptSnapshot = String(result.promptSnapshot || result.prompt || result.resolvedPrompt || '');
-      if (result.promptSnapshot !== promptSnapshot) {
-        result.promptSnapshot = promptSnapshot;
+    for (const [resultId, result] of Object.entries(this.index.results)) {
+      if (result.status !== 'available') {
+        delete this.index.results[resultId];
+        changed = true;
+        continue;
+      }
+      const prompt = String(result.promptSnapshot || result.prompt || result.resolvedPrompt || '');
+      const negativePrompt = String(
+        result.negativePromptSnapshot || result.negativePrompt || result.resolvedNegativePrompt || '',
+      );
+      if (result.prompt !== prompt || result.negativePrompt !== negativePrompt
+        || Object.hasOwn(result, 'promptSnapshot') || Object.hasOwn(result, 'resolvedPrompt')
+        || Object.hasOwn(result, 'negativePromptSnapshot')
+        || Object.hasOwn(result, 'resolvedNegativePrompt') || Object.hasOwn(result, 'deletedAt')) {
+        result.prompt = prompt;
+        result.negativePrompt = negativePrompt;
+        delete result.promptSnapshot;
+        delete result.resolvedPrompt;
+        delete result.negativePromptSnapshot;
+        delete result.resolvedNegativePrompt;
+        delete result.deletedAt;
         changed = true;
       }
       if (typeof result.favorite !== 'boolean') {
@@ -59,8 +76,19 @@ class MetadataStore {
         changed = true;
       }
     }
-    if (this.index.schemaVersion !== 2) {
-      this.index.schemaVersion = 2;
+    for (const tag of Object.values(this.index.tags)) {
+      const resultIds = (tag.resultIds || []).filter(resultId => this.index.results[resultId]);
+      if (JSON.stringify(resultIds) !== JSON.stringify(tag.resultIds || [])) {
+        tag.resultIds = resultIds;
+        changed = true;
+      }
+      if (!resultIds.includes(tag.latestResultId)) {
+        tag.latestResultId = resultIds.at(-1) || null;
+        changed = true;
+      }
+    }
+    if (this.index.schemaVersion !== 3) {
+      this.index.schemaVersion = 3;
       changed = true;
     }
     for (const attempt of Object.values(this.index.attempts)) {
@@ -109,7 +137,7 @@ class MetadataStore {
         chatId: '',
         messageUuid: '',
         prompt: '从本地图片目录恢复的记录',
-        promptSnapshot: '从本地图片目录恢复的记录',
+        negativePrompt: '',
         presetId: 'default',
         presetNameSnapshot: '恢复记录',
         apiModel: 'unknown',
@@ -119,7 +147,6 @@ class MetadataStore {
         sourceType: 'url',
         status: 'available',
         createdAt: stat.birthtime.toISOString(),
-        deletedAt: null,
         favorite: false,
         provider: 'openai',
         recovered: true,

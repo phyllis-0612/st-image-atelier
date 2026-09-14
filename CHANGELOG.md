@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.6.3 - 2026-09-14
+
+- 插件正式启用中文名「画笺」；扩展列表、魔法棒菜单、工具窗口、辅助标签、分享提示和可选 Server Plugin 均统一使用中文显示名。
+- 保留 `st-image-atelier`、`stImageAtelier` 等内部标识和数据路径，确保老用户原有设置、画廊、画师串与自动更新链路无缝继承。
+
+## 1.6.2 - 2026-09-14
+
+- 修复直连画廊元数据持续撑大 `settings.json`：画廊现独立保存为当前 ST 用户文件 `st-image-atelier-gallery.json`，`extension_settings.stImageAtelier` 只保留真正的配置项。
+- `schemaVersion` 升至 7；首次加载会把旧画廊中的可用记录安全迁移到独立文件，成功后移除旧 `gallery` 与删除墓碑字段。迁移可重试，不会先删后搬。
+- 画廊记录的正面提示词统一只保存为 `prompt`，旧 `promptSnapshot` / `resolvedPrompt` 自动合并；负面提示词同样归一为 `negativePrompt`。
+- 手动删除和自动清理改为真正移除元数据，不再累积 `deleted` 记录或结果 ID 墓碑；聊天卡片只保存结果 ID，不再复制整份画廊记录。
+- 新增回归验证：模拟迁移 50 条三份长提示词记录后再生成 1 张，断言 `extension_settings` 序列化内容逐字不变。
+
 ## 1.6.1 - 2026-09-12
 
 - 修复画廊批量模式中点击缩略图仍打开原图、导致看起来“选不上”的问题；现在缩略图、文字区和复选框都可选中或取消。

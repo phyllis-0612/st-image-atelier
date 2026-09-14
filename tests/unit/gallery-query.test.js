@@ -15,7 +15,7 @@ function item(overrides = {}) {
     resultId: overrides.resultId || crypto.randomUUID(),
     status: 'available',
     createdAt: '2026-09-07T08:00:00.000Z',
-    promptSnapshot: 'cat in sunlight',
+    prompt: 'cat in sunlight',
     apiModel: 'gpt-image-1',
     presetId: 'main',
     presetNameSnapshot: '主站 API',
@@ -25,14 +25,15 @@ function item(overrides = {}) {
   };
 }
 
-test('旧画廊数据补齐收藏与提示词快照默认值', () => {
+test('旧画廊数据迁移为单份提示词并补齐收藏默认值', () => {
   const normalized = normalizeGalleryItem({
     resultId: 'old',
     prompt: 'legacy prompt',
     presetId: 'novelai',
   });
   assert.equal(normalized.favorite, false);
-  assert.equal(normalized.promptSnapshot, 'legacy prompt');
+  assert.equal(normalized.prompt, 'legacy prompt');
+  assert.equal('promptSnapshot' in normalized, false);
   assert.equal(normalized.provider, 'novelai');
 });
 
@@ -41,7 +42,7 @@ test('搜索和多个筛选条件组合生效，缺字段与空结果不报错',
     item({ resultId: 'cat', favorite: true }),
     item({
       resultId: 'nai',
-      promptSnapshot: '1girl, moon',
+      prompt: '1girl, moon',
       apiModel: 'nai-diffusion-4-5-full',
       provider: 'novelai',
       presetId: 'novelai',
@@ -52,7 +53,7 @@ test('搜索和多个筛选条件组合生效，缺字段与空结果不报错',
     }),
     item({
       resultId: 'old',
-      promptSnapshot: 'old cat',
+      prompt: 'old cat',
       createdAt: '2026-08-01T00:00:00.000Z',
     }),
     { resultId: 'missing-fields', status: 'available' },
@@ -95,9 +96,9 @@ test('批量收藏、取消收藏和删除只作用于当前筛选后选中的�
   });
 
   const values = [
-    item({ resultId: 'cat-1', promptSnapshot: 'cat one' }),
-    item({ resultId: 'cat-2', promptSnapshot: 'cat two' }),
-    item({ resultId: 'dog', promptSnapshot: 'dog' }),
+    item({ resultId: 'cat-1', prompt: 'cat one' }),
+    item({ resultId: 'cat-2', prompt: 'cat two' }),
+    item({ resultId: 'dog', prompt: 'dog' }),
   ];
   const favoriteCalls = [];
   const deleteCalls = [];

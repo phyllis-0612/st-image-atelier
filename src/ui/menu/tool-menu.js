@@ -6,15 +6,15 @@ function createEntry(root, onOpen) {
   entry.className = 'list-group-item flex-container flexGap5 interactable';
   entry.tabIndex = 0;
   entry.setAttribute('role', 'button');
-  entry.setAttribute('aria-label', '打开 Image Atelier');
-  entry.setAttribute('title', '打开 Image Atelier');
+  entry.setAttribute('aria-label', '打开画笺');
+  entry.setAttribute('title', '打开画笺');
 
   const icon = root.createElement('i');
   icon.className = 'fa-solid fa-wand-magic-sparkles';
   icon.setAttribute('aria-hidden', 'true');
 
   const label = root.createElement('span');
-  label.textContent = 'Image Atelier';
+  label.textContent = '画笺';
 
   const activate = event => {
     if (event.type === 'keydown' && !['Enter', ' '].includes(event.key)) return;

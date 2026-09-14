@@ -24,7 +24,7 @@ export function parseDrawTags(source, { warn = console.warn } = {}) {
       const name = attributeMatch[1].toLowerCase();
       const value = attributeMatch[2] ?? attributeMatch[3] ?? '';
       if (!['ratio', 'quality', 'count'].includes(name)) {
-        warn(`[Image Atelier] 忽略未知属性: ${name}`);
+        warn(`[画笺] 忽略未知属性: ${name}`);
         continue;
       }
       attributes[name] = value;

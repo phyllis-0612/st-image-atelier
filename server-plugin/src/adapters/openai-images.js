@@ -183,7 +183,7 @@ async function generate({ preset, apiKey, prompt, parameters, settings, signal, 
     if (!retry || signal?.aborted) throw error;
     const fallbackBody = { ...body };
     for (const parameter of retry.adjustedParameters) delete fallbackBody[parameter];
-    console.info('[Image Atelier] 智能兼容重试', retry.reason);
+    console.info('[画笺] 智能兼容重试', retry.reason);
     await onCompatibilityRetry?.(retry);
     if (signal?.aborted) throw signal.reason || new AppError('ATTEMPT_INTERRUPTED', '用户已取消');
     try {

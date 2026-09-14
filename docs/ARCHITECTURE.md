@@ -14,8 +14,8 @@ MESSAGE_RECEIVED (live)
   -> magic bytes + 30 MB 大小校验
   -> POST /api/images/upload
   -> 图片进入当前 ST 用户图片目录
-  -> 卡片状态写回 message.extra
-  -> 画廊索引写入 extension_settings
+  -> 卡片只把 attempt 状态与 resultId 写回 message.extra
+  -> 画廊元数据写入当前用户文件 st-image-atelier-gallery.json
 ```
 
 `CHAT_CHANGED`、启动 hydration、消息重渲染只解析和恢复，不产生上游请求。
@@ -26,13 +26,14 @@ MESSAGE_RECEIVED (live)
   - `messageUuid`
   - 稳定 `tagId`
   - attempt 状态
-  - result 路径与元数据
+  - resultId 引用（不复制完整画廊元数据）
   - 自动生成与删除抑制标记
 - `extension_settings.stImageAtelier`
   - 当前生图引擎、普通设置和 GPT API 预设
   - NovelAI 非敏感参数与画师串预设
-  - 画廊索引
-  - 删除墓碑
+- SillyTavern 当前用户文件 `st-image-atelier-gallery.json`
+  - 独立画廊索引；提示词只保留 `prompt` / `negativePrompt` 各一份
+  - 删除时直接移除记录，不保留墓碑
 - SillyTavern `accountStorage`
   - 彼此隔离的 GPT API Key 与 NovelAI Persistent API Token
 - SillyTavern 用户图片目录

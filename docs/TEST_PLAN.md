@@ -51,6 +51,8 @@
 
 ## 画廊
 
+- [ ] 从 1.6.1 升级后，旧画廊迁入 `st-image-atelier-gallery.json`，`extension_settings.stImageAtelier` 不再含画廊或墓碑
+- [ ] 新增一条画廊记录前后 `settings.json` 文件大小与内容保持不变
 - [ ] 结果按时间倒序显示
 - [ ] 查看和下载原图可用
 - [ ] 删除前确认

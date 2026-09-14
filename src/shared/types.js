@@ -26,7 +26,8 @@
  *
  * @typedef {object} ResultRecord
  * @property {string} resultId
- * @property {string} promptSnapshot 实际使用的基础提示词；旧记录回退到 prompt/resolvedPrompt
+ * @property {string} prompt 实际使用的基础提示词（画廊元数据只保留这一份）
+ * @property {string} negativePrompt 实际使用的负面提示词
  * @property {string|undefined} negativePromptSnapshot NovelAI 实际使用的基础负面提示词
  * @property {boolean} favorite 旧记录默认为 false
  * @property {GenerationProvider} provider
