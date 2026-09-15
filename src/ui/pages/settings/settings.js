@@ -238,6 +238,17 @@ export function createToolPanel({ api, store }) {
   novelAiNegative.rows = 4;
   novelAiNegative.placeholder = '所有画师预设都会附加的全局负面词；通常留空';
   const novelAiQualityTags = input('checkbox');
+  const novelAiV5QualityPreset = select([
+    ['none', '关闭（不自动追加）'],
+    ['light', 'Light（清爽质量词）'],
+    ['standard', 'Standard（标准质量词）'],
+  ]);
+  const novelAiV5UcPreset = select([
+    ['none', '无（只使用自己填写的负面词）'],
+    ['light', 'Light（轻量纠错）'],
+    ['heavy', 'Heavy（强力排错）'],
+    ['human_focus', 'Human Focus（人物优先）'],
+  ]);
   const novelAiSmea = input('checkbox');
   const novelAiSmeaDyn = input('checkbox');
   const novelAiVariety = input('checkbox');
@@ -468,6 +479,11 @@ export function createToolPanel({ api, store }) {
     novelAiTimeout.value = String(Math.round((config.timeoutMs || 180000) / 1000));
     novelAiNegative.value = config.negativePrompt || '';
     novelAiQualityTags.checked = config.qualityTags !== false;
+    setSelectValue(
+      novelAiV5QualityPreset,
+      config.v5QualityPreset || (config.qualityTags === false ? 'none' : 'standard'),
+    );
+    setSelectValue(novelAiV5UcPreset, config.v5UcPreset || 'none');
     novelAiSmea.checked = Boolean(config.smea);
     novelAiSmeaDyn.checked = Boolean(config.smeaDyn);
     novelAiVariety.checked = config.variety !== false;
@@ -477,8 +493,12 @@ export function createToolPanel({ api, store }) {
 
   function syncNovelAiModelControls() {
     const isV3 = novelAiModel.value === 'nai-diffusion-3';
+    const isV5 = novelAiModel.value.includes('nai-diffusion-5');
     novelAiSmea.disabled = !isV3;
     novelAiSmeaDyn.disabled = !isV3 || !novelAiSmea.checked;
+    novelAiLegacyQualityField.hidden = isV5;
+    novelAiV5QualityField.hidden = !isV5;
+    novelAiV5UcField.hidden = !isV5;
   }
 
   async function saveCurrentArtistPreset(presetId = activeArtistPresetId) {
@@ -512,7 +532,11 @@ export function createToolPanel({ api, store }) {
       seed: Number(novelAiSeed.value),
       timeoutMs: Number(novelAiTimeout.value) * 1000,
       negativePrompt: novelAiNegative.value.trim(),
-      qualityTags: novelAiQualityTags.checked,
+      qualityTags: novelAiModel.value.includes('nai-diffusion-5')
+        ? novelAiV5QualityPreset.value !== 'none'
+        : novelAiQualityTags.checked,
+      v5QualityPreset: novelAiV5QualityPreset.value,
+      v5UcPreset: novelAiV5UcPreset.value,
       smea: novelAiSmea.checked,
       smeaDyn: novelAiSmeaDyn.checked,
       variety: novelAiVariety.checked,
@@ -964,7 +988,7 @@ export function createToolPanel({ api, store }) {
   );
   const artistHint = document.createElement('small');
   artistHint.className = 'stia-muted';
-  artistHint.textContent = '切换画师预设时，名称、正面串和负面串会一起保存并切换。正面按“该预设正面串 → 正文 → 质量标签”组合；负面按“该预设负面串 → 全局附加负面词”组合。';
+  artistHint.textContent = '切换画师预设时，名称、正面串和负面串会一起保存并切换。正面按“该预设正面串 → 正文 → 质量标签”组合；负面按“该预设负面串 → 全局附加负面词 → V5 负面预设”组合。';
   artistGrid.append(artistHint);
 
   const novelAiParametersHeading = document.createElement('h4');
@@ -988,8 +1012,24 @@ export function createToolPanel({ api, store }) {
   novelAiAdvancedSummary.textContent = 'NovelAI 高级设置';
   const novelAiAdvancedGrid = document.createElement('div');
   novelAiAdvancedGrid.className = 'stia-form-grid';
+  const novelAiLegacyQualityField = field('自动加入模型质量标签', novelAiQualityTags);
+  novelAiLegacyQualityField.classList.add('stia-field--check');
+  const novelAiV5QualityField = field('V5 质量词预设', novelAiV5QualityPreset);
+  const v5QualityHint = document.createElement('small');
+  v5QualityHint.className = 'stia-muted';
+  v5QualityHint.textContent = 'Light 追加 amazing quality；Standard 追加 masterpiece。强画风需要保真时可关闭。';
+  novelAiV5QualityField.append(v5QualityHint);
+  const novelAiV5UcField = field('V5 负面预设', novelAiV5UcPreset);
+  const v5UcHint = document.createElement('small');
+  v5UcHint.className = 'stia-muted';
+  v5UcHint.textContent = '会在画师串负面词与全局负面词之后合并官方 V5 排错词；只对 V5 生效。';
+  novelAiV5UcField.append(v5UcHint);
+  novelAiAdvancedGrid.append(
+    novelAiLegacyQualityField,
+    novelAiV5QualityField,
+    novelAiV5UcField,
+  );
   for (const [labelText, control] of [
-    ['自动加入模型质量标签', novelAiQualityTags],
     ['SMEA', novelAiSmea],
     ['SMEA DYN', novelAiSmeaDyn],
     ['Variety', novelAiVariety],

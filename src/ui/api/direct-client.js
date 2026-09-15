@@ -76,7 +76,7 @@ function normalizePreset(value = {}) {
 }
 
 function normalizeNovelAiConfig(value = {}) {
-  return {
+  const config = {
     ...clone(DEFAULT_NOVELAI_CONFIG),
     ...value,
     ratioMap: {
@@ -84,6 +84,15 @@ function normalizeNovelAiConfig(value = {}) {
       ...(value.ratioMap || {}),
     },
   };
+  const qualityPreset = String(value.v5QualityPreset || '');
+  config.v5QualityPreset = ['none', 'light', 'standard'].includes(qualityPreset)
+    ? qualityPreset
+    : value.qualityTags === false ? 'none' : 'standard';
+  const ucPreset = String(value.v5UcPreset || '');
+  config.v5UcPreset = ['none', 'light', 'heavy', 'human_focus'].includes(ucPreset)
+    ? ucPreset
+    : 'none';
+  return config;
 }
 
 function normalizeArtistPreset(value = {}) {

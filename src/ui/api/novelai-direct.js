@@ -35,9 +35,35 @@ const QUALITY_TAGS = Object.freeze({
   'nai-diffusion-4-curated-preview': 'rating:general, best quality, very aesthetic, absurdres',
   'nai-diffusion-4-5-full': 'very aesthetic, masterpiece, no text',
   'nai-diffusion-4-5-curated': 'very aesthetic, masterpiece, no text, rating:general',
-  'nai-diffusion-5-full': 'very aesthetic, amazing quality, no text',
-  'nai-diffusion-5-curated': 'very aesthetic, masterpiece, no text',
 });
+
+export const NOVELAI_V5_QUALITY_PRESETS = Object.freeze({
+  none: '',
+  light: 'very aesthetic, amazing quality, no text',
+  standard: 'very aesthetic, masterpiece, no text',
+});
+
+export const NOVELAI_V5_UC_PRESETS = Object.freeze({
+  none: '',
+  light: 'lowres, bad hands, bad anatomy, artistic error, sepia, white haze, worst quality, very displeasing, jpeg artifacts, 0::ai-generated::',
+  heavy: 'lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page',
+  human_focus: 'lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page, @_@, mismatched pupils, glowing eyes, bad anatomy',
+});
+
+function isNovelAiV5(model) {
+  return String(model || '').includes('nai-diffusion-5');
+}
+
+function v5QualityPreset(config = {}) {
+  const saved = String(config.v5QualityPreset || '');
+  if (Object.hasOwn(NOVELAI_V5_QUALITY_PRESETS, saved)) return saved;
+  return config.qualityTags === false ? 'none' : 'standard';
+}
+
+function v5UcPreset(config = {}) {
+  const saved = String(config.v5UcPreset || '');
+  return Object.hasOwn(NOVELAI_V5_UC_PRESETS, saved) ? saved : 'none';
+}
 
 function joinPrompt(...parts) {
   return parts
@@ -84,12 +110,17 @@ export function normalizeNovelAiEndpoint(baseUrl, generationPath = '/ai/generate
 }
 
 export function composeNovelAiPrompt(prompt, artistPrompt = '', config = {}) {
-  const quality = config.qualityTags === false ? '' : QUALITY_TAGS[config.model] || '';
+  const quality = isNovelAiV5(config.model)
+    ? NOVELAI_V5_QUALITY_PRESETS[v5QualityPreset(config)]
+    : config.qualityTags === false ? '' : QUALITY_TAGS[config.model] || '';
   return joinPrompt(artistPrompt, prompt, quality);
 }
 
 export function composeNovelAiNegativePrompt(artistNegativePrompt = '', config = {}) {
-  return joinPrompt(artistNegativePrompt, config.negativePrompt);
+  const v5Preset = isNovelAiV5(config.model)
+    ? NOVELAI_V5_UC_PRESETS[v5UcPreset(config)]
+    : '';
+  return joinPrompt(artistNegativePrompt, config.negativePrompt, v5Preset);
 }
 
 function randomSeed() {
@@ -198,10 +229,13 @@ export function buildNovelAiPayload({
     };
   }
   if (isV5) {
+    const qualityPreset = v5QualityPreset(config);
     parameters.straight_alpha = false;
-    parameters.tag_hint_qt = config.qualityTags === false ? 0 : 1;
+    parameters.tag_hint_qt = qualityPreset === 'none' ? 0 : 1;
     parameters.tag_hint_uc_preset = 0;
-    parameters.qualityPresetId = config.qualityTags === false ? 'none' : 'standard';
+    parameters.qualityPresetId = qualityPreset;
+    // The selected V5 UC preset is expanded into negative_prompt above so
+    // native and relay endpoints produce the same result without double-applying it.
     parameters.ucPresetId = 'none';
     parameters.image_format = 'png';
     delete parameters.qualityToggle;

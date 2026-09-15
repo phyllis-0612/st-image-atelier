@@ -701,7 +701,7 @@ test('画廊元数据迁移后新增记录不改写 extension_settings', async t
     'schemaVersion',
     'settings',
   ]);
-  assert.equal(extensionSettings.stImageAtelier.schemaVersion, 7);
+  assert.equal(extensionSettings.stImageAtelier.schemaVersion, 8);
   const migrated = Object.values(galleryStore.document.results);
   assert.equal(migrated.length, 50);
   assert.equal(migrated[0].prompt, longPrompt);
@@ -763,7 +763,7 @@ test('已迁移版本不会从旧聊天副本复活已删除的画廊记录', as
       save: async () => {},
       headers: () => ({}),
     },
-    extensionSettings: { stImageAtelier: { schemaVersion: 7 } },
+    extensionSettings: { stImageAtelier: { schemaVersion: 8 } },
     saveSettingsDebounced: () => {},
     galleryStore: createMemoryGalleryMetadataStore(),
     keyStorage: { getItem: () => null, setItem() {}, removeItem() {} },

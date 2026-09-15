@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { deflateRawSync } from 'node:zlib';
 import {
   buildNovelAiPayload,
+  composeNovelAiNegativePrompt,
   composeNovelAiPrompt,
   generateNovelAiImages,
   normalizeNovelAiEndpoint,
@@ -58,6 +59,69 @@ test('NovelAI 按画师串、正文、质量标签的顺序组装提示词', () 
     composeNovelAiPrompt('1girl', '', { model: 'nai-diffusion-4-5-full', qualityTags: false }),
     '1girl',
   );
+});
+
+test('NovelAI V5 支持关闭、Light 与 Standard 三档质量词', () => {
+  const base = { model: 'nai-diffusion-5-full' };
+  assert.equal(
+    composeNovelAiPrompt('1girl', 'artist:sample', { ...base, v5QualityPreset: 'none' }),
+    'artist:sample, 1girl',
+  );
+  assert.equal(
+    composeNovelAiPrompt('1girl', 'artist:sample', { ...base, v5QualityPreset: 'light' }),
+    'artist:sample, 1girl, very aesthetic, amazing quality, no text',
+  );
+  assert.equal(
+    composeNovelAiPrompt('1girl', 'artist:sample', { ...base, v5QualityPreset: 'standard' }),
+    'artist:sample, 1girl, very aesthetic, masterpiece, no text',
+  );
+});
+
+test('NovelAI V5 负面预设按画师负面、全局负面、官方预设的顺序合并', () => {
+  const negative = composeNovelAiNegativePrompt('avoid artist', {
+    model: 'nai-diffusion-5-full',
+    negativePrompt: 'avoid global',
+    v5UcPreset: 'light',
+  });
+  assert.match(negative, /^avoid artist, avoid global, lowres, bad hands/);
+  assert.match(negative, /0::ai-generated::$/);
+  assert.equal(
+    composeNovelAiNegativePrompt('avoid artist', {
+      model: 'nai-diffusion-4-5-full',
+      negativePrompt: 'avoid global',
+      v5UcPreset: 'heavy',
+    }),
+    'avoid artist, avoid global',
+  );
+});
+
+test('NovelAI V5 请求记录所选质量档且不会让上游重复套用 UC', () => {
+  const generated = buildNovelAiPayload({
+    config: {
+      model: 'nai-diffusion-5-full',
+      sampler: 'k_euler',
+      noiseSchedule: 'karras',
+      defaultSize: '768x1152',
+      defaultCount: 1,
+      steps: 28,
+      scale: 5,
+      seed: 42,
+      negativePrompt: '',
+      v5QualityPreset: 'light',
+      v5UcPreset: 'human_focus',
+      variety: false,
+    },
+    prompt: '1girl',
+    artistPrompt: '',
+    artistNegativePrompt: 'custom negative',
+  });
+  assert.match(generated.resolvedPrompt, /amazing quality/);
+  assert.doesNotMatch(generated.resolvedPrompt, /masterpiece/);
+  assert.match(generated.resolvedNegativePrompt, /custom negative/);
+  assert.match(generated.resolvedNegativePrompt, /mismatched pupils/);
+  assert.equal(generated.body.parameters.qualityPresetId, 'light');
+  assert.equal(generated.body.parameters.tag_hint_qt, 1);
+  assert.equal(generated.body.parameters.ucPresetId, 'none');
 });
 
 test('NovelAI 站点可填写 Base URL 或完整生图端点', () => {

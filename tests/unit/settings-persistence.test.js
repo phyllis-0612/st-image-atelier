@@ -146,4 +146,27 @@ test('总开关即时持久化，独立保存生图参数后立即更新当前�
   assert.equal(size.value, '512x768');
   assert.equal(quality.value, 'high');
   assert.equal(count.value, '2');
+
+  const novelAiSection = document.querySelector('.stia-section--novelai');
+  const novelAiField = text => [...novelAiSection.querySelectorAll('label')]
+    .find(label => label.firstElementChild?.textContent === text);
+  const novelAiModel = novelAiField('模型').querySelector('select');
+  const legacyQuality = novelAiField('自动加入模型质量标签');
+  const v5Quality = novelAiField('V5 质量词预设');
+  const v5Uc = novelAiField('V5 负面预设');
+  assert.equal(legacyQuality.hidden, false);
+  assert.equal(v5Quality.hidden, true);
+  assert.equal(v5Uc.hidden, true);
+
+  novelAiModel.value = 'nai-diffusion-5-full';
+  novelAiModel.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(legacyQuality.hidden, true);
+  assert.equal(v5Quality.hidden, false);
+  assert.equal(v5Uc.hidden, false);
+
+  novelAiModel.value = 'nai-diffusion-4-5-full';
+  novelAiModel.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(legacyQuality.hidden, false);
+  assert.equal(v5Quality.hidden, true);
+  assert.equal(v5Uc.hidden, true);
 });
