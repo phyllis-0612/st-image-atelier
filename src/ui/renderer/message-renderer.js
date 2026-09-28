@@ -259,7 +259,9 @@ function comparableText(value) {
 }
 
 function hasCard(container, tagId) {
-  return Boolean(container.querySelector(`.stia-card[data-tag-id="${CSS.escape(tagId)}"]`));
+  const card = container.querySelector(`.stia-card[data-tag-id="${CSS.escape(tagId)}"]`);
+  // 楼底卡片仍需要寻找正文锚点，但寻找期间不必先将已加载的图片摘下。
+  return Boolean(card && !card.closest('.stia-card-list'));
 }
 
 function orphanDrawElements(container) {
@@ -420,6 +422,12 @@ export function createMessageRenderer(dependencies) {
   }
 
   function makeCard(tag) {
+    const existing = cards.get(tag.tagId);
+    if (existing) {
+      existing.updateTag(tag);
+      existing.render();
+      return existing;
+    }
     const card = createCard({
       tag,
       api,
@@ -444,24 +452,32 @@ export function createMessageRenderer(dependencies) {
        等重建完成再由 DOM 监听重新挂载。 */
     if (container.querySelector('textarea')) return { mounted: 0, fallback: 0 };
 
+    const finish = result => {
+      for (const list of container.querySelectorAll(':scope > .stia-card-list')) {
+        if (!list.childElementCount) list.remove();
+      }
+      return result;
+    };
+
     const activeTagIds = new Set(tags.map(tag => tag.tagId));
     for (const card of [...container.querySelectorAll('.stia-card[data-tag-id]')]) {
       const tagId = card.getAttribute('data-tag-id');
-      if (!tagId || activeTagIds.has(tagId)) continue;
-      card.remove();
-      cards.delete(tagId);
-    }
-
-    /* 楼底 fallback 里的卡片不算"挂好了"：每轮都先摘下来，让它有机会回到原地
-       （比如上一轮 DOM 还没重建完、提示词原文还没回来时它才被迫落到楼底）。
-       仍然找不到锚点时原样放回去，不重建元素。 */
-    const detached = new Map();
-    for (const list of [...container.querySelectorAll(':scope > .stia-card-list')]) {
-      for (const card of [...list.querySelectorAll('.stia-card[data-tag-id]')]) {
-        detached.set(card.getAttribute('data-tag-id'), card);
+      if (!tagId || !activeTagIds.has(tagId)) {
         card.remove();
+        cards.delete(tagId);
+      } else {
+        const existing = cards.get(tagId);
+        if (!existing) card.remove();
+        else if (existing.root !== card) card.replaceWith(existing.root);
       }
-      list.remove();
+    }
+    // 标签对象可能由编辑、改写或切换 swipe 更新；原卡片的按钮要使用最新参数。
+    for (const tag of tags) {
+      const existing = cards.get(tag.tagId);
+      if (existing) {
+        existing.updateTag(tag);
+        existing.render();
+      }
     }
 
     cleanupExistingSources(container, tags);
@@ -469,7 +485,7 @@ export function createMessageRenderer(dependencies) {
     const missing = tags
       .map((tag, index) => ({ tag, index }))
       .filter(({ tag }) => !hasCard(container, tag.tagId));
-    if (!missing.length) return { mounted: 0, fallback: 0 };
+    if (!missing.length) return finish({ mounted: 0, fallback: 0 });
 
     let unresolved = missing;
     let mounted = 0;
@@ -483,7 +499,7 @@ export function createMessageRenderer(dependencies) {
         mounted += 1;
       }
       unresolved = unresolved.slice(anchored.length);
-      if (!unresolved.length) return { mounted, fallback: 0 };
+      if (!unresolved.length) return finish({ mounted, fallback: 0 });
     }
 
     const ranges = textRanges(container);
@@ -503,7 +519,7 @@ export function createMessageRenderer(dependencies) {
     const mountedIds = new Set(replacements.map(item => item.tag.tagId));
     unresolved = unresolved.filter(({ tag }) => !mountedIds.has(tag.tagId)
       && !hasCard(container, tag.tagId));
-    if (!unresolved.length) return { mounted, fallback: 0 };
+    if (!unresolved.length) return finish({ mounted, fallback: 0 });
 
     const promptMatches = promptRanges(container, unresolved.map(item => item.tag));
     const promptReplacements = unresolved
@@ -521,20 +537,20 @@ export function createMessageRenderer(dependencies) {
     const promptMountedIds = new Set(promptReplacements.map(item => item.tag.tagId));
     unresolved = unresolved.filter(({ tag }) => !promptMountedIds.has(tag.tagId)
       && !hasCard(container, tag.tagId));
-    if (!unresolved.length) return { mounted, fallback: 0 };
+    if (!unresolved.length) return finish({ mounted, fallback: 0 });
 
-    const fallback = document.createElement('div');
-    fallback.className = 'stia-card-list';
-    container.append(fallback);
-    for (const { tag } of unresolved) {
-      const previous = detached.get(tag.tagId);
-      if (previous && cards.has(tag.tagId)) {
-        fallback.append(previous);
-      } else {
-        fallback.append(makeCard(tag).root);
-      }
+    let fallback = container.querySelector(':scope > .stia-card-list');
+    if (!fallback) {
+      fallback = document.createElement('div');
+      fallback.className = 'stia-card-list';
+      container.append(fallback);
     }
-    return { mounted, fallback: unresolved.length };
+    for (const [index, { tag }] of unresolved.entries()) {
+      const card = makeCard(tag);
+      const previous = fallback.children[index];
+      if (previous !== card.root) fallback.insertBefore(card.root, previous || null);
+    }
+    return finish({ mounted, fallback: unresolved.length });
   }
 
   function renderTag(tagId) {

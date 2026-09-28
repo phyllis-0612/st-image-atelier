@@ -78,6 +78,33 @@ export function createCard({
   root.className = 'stia-card';
   root.dataset.tagId = tag.tagId;
   root.setAttribute('aria-label', '画笺生图卡片');
+  let renderedSignature;
+  let renderedBody;
+  let mediaCache;
+  let currentView;
+
+  // 图片只绑定一次事件；复用后读取最新快照，避免回调仍指向旧提示词或旧结果。
+  function openOriginal() {
+    const { latest, actualPrompt, size, attempt, imageSrc } = currentView;
+    return openImageViewer({
+      src: imageSrc,
+      alt: actualPrompt.slice(0, 120),
+      filename: latest.resultId,
+      prompt: actualPrompt,
+      meta: [attempt?.model, size].filter(Boolean).join(' · '),
+    });
+  }
+
+  function adjustRegenerate() {
+    const { latest, attempt, actualPrompt, actualNegativePrompt } = currentView;
+    return onAdjustRegenerate(tag, {
+      prompt: actualPrompt,
+      negativePrompt: actualNegativePrompt,
+      provider: latest?.provider || attempt?.provider || 'openai',
+      ...(latest ? { result: latest } : {}),
+      attempt,
+    });
+  }
 
   /* 一键删除：卡片、消息里的 <draw> 注入词、标签元数据一起清掉，不留痕迹。
      只在失败和待生成两种状态提供；已出图的走画廊删除，生成中的先取消。 */
@@ -108,7 +135,29 @@ export function createCard({
       portrait: '竖图',
       landscape: '横图',
     }[tag.ratio] || '';
-    root.replaceChildren();
+    const active = attempt && ACTIVE_STATUSES.has(attempt.status);
+    const mode = active ? 'active' : latest ? 'succeeded'
+      : attempt && ['failed', 'interrupted', 'cancelled'].includes(attempt.status) ? 'failed' : 'idle';
+    const imageSrc = mode === 'succeeded' ? api.fileUrl(latest.resultId) : '';
+    currentView = { latest, attempt, actualPrompt, actualNegativePrompt, size, imageSrc };
+    // 只比较实际画面需要的数据，不受其他卡片、更新时间、收藏或无关设置影响。
+    const signature = JSON.stringify(mode === 'active'
+      ? [mode, attempt.attemptId, attempt.status, attempt.requestMode, attempt.statusMessage,
+        attempt.model, size, Boolean(latest)]
+      : mode === 'succeeded'
+        ? [mode, latest.resultId, imageSrc, actualPrompt, size, available.length, canAdjust]
+        : [mode, attempt?.status, attempt?.model, attempt?.errorMessage, Boolean(attempt),
+          size, ratioLabel, actualPrompt, canAdjust, Boolean(state.tag?.resultIds?.length)]);
+    if (signature === renderedSignature) return;
+    const promptOpen = root.querySelector?.('.stia-prompt')?.open || false;
+    const details = () => {
+      const element = promptDetails(actualPrompt);
+      element.open = promptOpen;
+      return element;
+    };
+    if (mode !== 'succeeded') root.replaceChildren();
+    // 真正删除图片后释放缓存；重新生成期间保留，以便取消或失败后恢复原图。
+    if (!latest) mediaCache = null;
     root.className = 'stia-card';
 
     if (attempt && ACTIVE_STATUSES.has(attempt.status)) {
@@ -139,32 +188,37 @@ export function createCard({
         '×',
       ));
       root.append(body);
+      renderedBody = body;
+      renderedSignature = signature;
       return;
     }
 
     if (latest) {
       root.classList.add('stia-card--succeeded');
-      const media = document.createElement('div');
-      media.className = 'stia-card__media';
-      const image = document.createElement('img');
-      image.className = 'stia-card__image';
-      image.src = api.fileUrl(latest.resultId);
-      image.alt = actualPrompt.slice(0, 120);
-      image.loading = 'lazy';
-      const openOriginal = () => openImageViewer({
-        src: api.fileUrl(latest.resultId),
-        alt: image.alt,
-        filename: latest.resultId,
-        prompt: actualPrompt,
-        meta: [attempt?.model, size].filter(Boolean).join(' · '),
-      });
-      makeImageSaveable(image, openOriginal);
-      media.append(image);
+      if (mediaCache?.resultId !== latest.resultId || mediaCache?.src !== imageSrc) {
+        const media = document.createElement('div');
+        media.className = 'stia-card__media';
+        const image = document.createElement('img');
+        image.className = 'stia-card__image';
+        image.src = imageSrc;
+        image.loading = 'lazy';
+        makeImageSaveable(image, openOriginal);
+        media.append(image);
+        mediaCache = { resultId: latest.resultId, src: imageSrc, media, image, badge: null };
+      }
+      const { media, image } = mediaCache;
+      const alt = actualPrompt.slice(0, 120);
+      if (image.alt !== alt) image.alt = alt;
       if (size) {
-        const badge = document.createElement('span');
-        badge.className = 'stia-card__size';
-        badge.textContent = size;
-        media.append(badge);
+        if (!mediaCache.badge) {
+          mediaCache.badge = document.createElement('span');
+          mediaCache.badge.className = 'stia-card__size';
+          media.append(mediaCache.badge);
+        }
+        if (mediaCache.badge.textContent !== size) mediaCache.badge.textContent = size;
+      } else if (mediaCache.badge) {
+        mediaCache.badge.remove();
+        mediaCache.badge = null;
       }
       const body = document.createElement('div');
       body.className = 'stia-card__body';
@@ -185,16 +239,17 @@ export function createCard({
         button('画廊', 'stia-button--square', () => onOpenGallery(tag.tagId), '▦'),
       );
       if (canAdjust) {
-        actions.append(button('调整后重绘', '', () => onAdjustRegenerate(tag, {
-          prompt: actualPrompt,
-          negativePrompt: actualNegativePrompt,
-          provider: latest.provider || attempt?.provider || 'openai',
-          result: latest,
-          attempt,
-        }), '✎'));
+        actions.append(button('调整后重绘', '', adjustRegenerate, '✎'));
       }
-      body.append(completion, actions, promptDetails(actualPrompt));
-      root.append(media, body);
+      body.append(completion, actions, details());
+      if (media.parentNode === root) {
+        // 同一张图仍在原位置：仅替换文字与按钮，图片不摘下、不重写 src。
+        renderedBody.replaceWith(body);
+      } else {
+        root.replaceChildren(media, body);
+      }
+      renderedBody = body;
+      renderedSignature = signature;
       return;
     }
 
@@ -213,15 +268,12 @@ export function createCard({
       actions.append(button('重试', 'stia-button--danger-soft', () => {
         onGenerate(tag, 'manual');
       }, '↻'));
-      if (canAdjust) actions.append(button('调整后重绘', '', () => onAdjustRegenerate(tag, {
-        prompt: actualPrompt,
-        negativePrompt: actualNegativePrompt,
-        provider: attempt.provider || 'openai',
-        attempt,
-      }), '✎'));
+      if (canAdjust) actions.append(button('调整后重绘', '', adjustRegenerate, '✎'));
       if (onRemove) actions.append(removeButton());
-      body.append(actions, promptDetails(actualPrompt));
+      body.append(actions, details());
       root.append(body);
+      renderedBody = body;
+      renderedSignature = signature;
       return;
     }
 
@@ -244,15 +296,12 @@ export function createCard({
       onGenerate(tag, 'manual');
     }, '▧'));
     if (onRemove) actions.append(removeButton());
-    if (canAdjust && attempt) actions.append(button('调整后重绘', '', () => onAdjustRegenerate(tag, {
-      prompt: actualPrompt,
-      negativePrompt: actualNegativePrompt,
-      provider: attempt.provider || 'openai',
-      attempt,
-    }), '✎'));
-    body.append(promptDetails(actualPrompt), actions);
+    if (canAdjust && attempt) actions.append(button('调整后重绘', '', adjustRegenerate, '✎'));
+    body.append(details(), actions);
     root.append(body);
+    renderedBody = body;
+    renderedSignature = signature;
   }
 
-  return { root, render };
+  return { root, render, updateTag(nextTag) { tag = nextTag; } };
 }
