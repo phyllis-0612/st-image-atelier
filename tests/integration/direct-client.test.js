@@ -16,7 +16,7 @@ async function waitUntil(predicate) {
   throw new Error('等待测试请求超时');
 }
 
-async function concurrentFixture(t) {
+async function concurrentFixture(t, clock = {}) {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
   const requests = [];
@@ -29,7 +29,7 @@ async function concurrentFixture(t) {
     }
     if (url === '/api/images/delete') return response(200, {});
     return new Promise((resolve, reject) => {
-      requests.push({ key: options.headers.Authorization, signal: options.signal,
+      requests.push({ url, body: JSON.parse(options.body), key: options.headers.Authorization, signal: options.signal,
         finish: () => resolve(response(200, { data: [{ b64_json: PNG_BASE64 }] })) });
       options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
     });
@@ -43,7 +43,7 @@ async function concurrentFixture(t) {
     keyStorage: { getItem: key => keys.get(key), setItem: (key, value) => keys.set(key, value) } });
   await client.updatePreset({ baseUrl: 'https://example.com', apiKey: 'key-old', selectedModel: 'image', timeoutMs: 5 });
   const store = createStore();
-  const runner = createGenerationRunner({ api: client, compat, store, uuid: () => crypto.randomUUID() });
+  const runner = createGenerationRunner({ api: client, compat, store, ...clock, uuid: () => crypto.randomUUID() });
   return { client, runner, store, tag, requests, uploads };
 }
 
@@ -96,6 +96,41 @@ test('取消一条并行请求不影响另一条请求回图', async t => {
   assert.equal(state.results.length, 1);
   assert.equal(state.attempts.find(item => item.attemptId === newestId).status, 'cancelled');
 });
+
+for (const first of [0, 1]) {
+  test(`自动备用使用独立 Key，${first === 0 ? '主' : '备用'}请求先回图仍保留两图`, async t => {
+    let fire;
+    const f = await concurrentFixture(t, { setTimer: (fn, ms) => { fire = fn; assert.equal(ms, 61000); return 1; }, clearTimer() {} });
+    const backup = await f.client.createPreset({ name: 'backup' });
+    await f.client.updatePreset(backup.id, { baseUrl: 'https://backup.example.com', apiKey: 'key-backup', selectedModel: 'backup-image', timeoutMs: 5 });
+    await f.client.selectPreset('default');
+    const settings = await f.client.updateSettings({ enableBackupPreset: true, backupPresetId: backup.id, backupWaitSeconds: 61, keepWaitingOnTimeout: false });
+    const { items } = await f.client.getPresets();
+    f.store.set({ settings, preset: items.find(item => item.id === 'default') });
+    const main = f.runner.generate(f.tag, 'manual', { prompt: 'edited' });
+    await waitUntil(() => f.requests.length === 1);
+    fire();
+    await waitUntil(() => f.requests.length === 2);
+    assert.deepEqual(f.requests.map(item => item.key), ['Bearer key-old', 'Bearer key-backup']);
+    assert.match(f.requests[1].url, /^https:\/\/backup\.example\.com/);
+    assert.equal(f.requests[1].body.model, 'backup-image');
+    assert.equal(f.requests[1].body.prompt, 'edited');
+    await waitUntil(() => f.tag.attempts.every(item => item.statusMessage?.includes('仍在等待')));
+    assert.ok(f.requests.every(item => !item.signal.aborted), '主请求与备用都越过硬超时继续接图');
+    assert.equal((await f.client.getPresets()).activePresetId, 'default');
+    f.requests[first].finish();
+    await waitUntil(() => f.uploads.length === 1);
+    assert.equal(f.runner.hasActive(f.tag.tagId), true);
+    f.requests[1 - first].finish();
+    await main;
+    await waitUntil(() => !f.runner.hasActive(f.tag.tagId));
+    const [state] = await f.client.resolveTags([f.tag.tagId]);
+    assert.equal(state.results.length, 2);
+    assert.ok(state.attempts.every(item => item.promptSnapshot === 'edited'));
+    assert.equal(state.attempts.filter(item => item.backupForAttemptId).length, 1);
+  });
+}
+
 
 function response(status, payload) {
   return new Response(JSON.stringify(payload), {

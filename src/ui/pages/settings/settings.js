@@ -1,3 +1,4 @@
+import { normalizeBackupSettings } from '../../../shared/backup-generation.js';
 import { createGalleryPage } from '../gallery/gallery.js';
 import {
   NOVELAI_MODELS,
@@ -131,6 +132,15 @@ export function createToolPanel({ api, store }) {
   const enablePromptOverrideRegenerate = input('checkbox');
   const enableSmartRetry = input('checkbox');
   const keepWaitingOnTimeout = input('checkbox');
+  const enableBackupPreset = input('checkbox');
+  const backupPresetSelector = select();
+  backupPresetSelector.setAttribute('aria-label', '选择备用 API 预设');
+  const backupWaitSeconds = input('number');
+  backupWaitSeconds.min = '1';
+  backupWaitSeconds.max = '86400';
+  backupWaitSeconds.step = '1';
+  backupWaitSeconds.value = '180';
+  backupWaitSeconds.inputMode = 'numeric';
   const themeMode = select([
     ['tavern', '跟随酒馆主题'],
     ['light', '日间模式'],
@@ -412,6 +422,65 @@ export function createToolPanel({ api, store }) {
     );
   });
 
+  function syncBackupControls() {
+    const supported = generationProvider.value === 'openai' && executionMode.value === 'direct';
+    enableBackupPreset.disabled = !supported;
+    backupPresetSelector.disabled = !supported;
+    backupWaitSeconds.disabled = !supported;
+  }
+
+  function updateBackupSelector(selectedId = backupPresetSelector.value || '') {
+    backupPresetSelector.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '请选择备用预设（与主预设不同）';
+    backupPresetSelector.append(placeholder);
+    for (const preset of presets.filter(item => item.id !== activePresetId)) {
+      const option = document.createElement('option');
+      option.value = preset.id;
+      option.textContent = preset.name;
+      backupPresetSelector.append(option);
+    }
+    if (selectedId && ![...backupPresetSelector.options].some(option => option.value === selectedId)) {
+      const unavailable = document.createElement('option');
+      unavailable.value = selectedId;
+      unavailable.textContent = selectedId === activePresetId ? '当前备用与主预设相同，请重新选择' : '原备用预设已删除，请重新选择';
+      unavailable.disabled = true;
+      backupPresetSelector.append(unavailable);
+    }
+    backupPresetSelector.value = selectedId;
+  }
+
+  async function persistBackupOptions() {
+    const options = normalizeBackupSettings({
+      backupPresetId: backupPresetSelector.value,
+      backupWaitSeconds: backupWaitSeconds.value,
+      enableBackupPreset: enableBackupPreset.checked,
+    });
+    backupWaitSeconds.value = String(options.backupWaitSeconds);
+    try {
+      const nextSettings = await api.updateSettings(options);
+      store.set({ settings: { ...store.state.settings, ...nextSettings } });
+      status.className = 'stia-status';
+      status.textContent = '备用预设和等待时长已保存';
+    } catch (error) {
+      status.className = 'stia-status stia-error';
+      status.textContent = `保存失败：${error.message}`;
+    }
+  }
+  backupPresetSelector.addEventListener('change', () => { void persistBackupOptions(); });
+  backupWaitSeconds.addEventListener('change', () => { void persistBackupOptions(); });
+  enableBackupPreset.addEventListener('change', async () => {
+    if (enableBackupPreset.checked && !presets.some(item => item.id === backupPresetSelector.value && item.id !== activePresetId)) {
+      enableBackupPreset.checked = false;
+      status.className = 'stia-status stia-error';
+      status.textContent = '请先选择与主预设不同的备用 API 预设';
+      return;
+    }
+    await persistBooleanSetting(enableBackupPreset, 'enableBackupPreset', '备用预设自动并行生成已开启', '备用预设自动并行生成已关闭');
+    syncBackupControls();
+  });
+
   function updateModelList(models, selectedValue = '') {
     const values = (models || []).map(item => item.id).filter(Boolean);
     if (selectedValue && !values.includes(selectedValue)) values.unshift(selectedValue);
@@ -564,6 +633,7 @@ export function createToolPanel({ api, store }) {
     if (!preset) return;
     activePresetId = preset.id;
     presetSelector.value = preset.id;
+    updateBackupSelector();
     presetName.value = preset.name || '';
     baseUrl.value = preset.baseUrl || '';
     modelsPath.value = preset.modelsPath || '/v1/models';
@@ -608,6 +678,7 @@ export function createToolPanel({ api, store }) {
       presetSelector.append(option);
     }
     presetSelector.value = activeId;
+    updateBackupSelector();
   }
 
   function parseExtraBody() {
@@ -1093,7 +1164,13 @@ export function createToolPanel({ api, store }) {
   const waitingDescription = document.createElement('small');
   waitingDescription.textContent = '默认开启：达到预设时间只提醒，不中断也不因等待过久而重发。可在生成卡片点“并行重 roll”，旧请求继续跑；先保存新 Key 或切换 API 预设，再发起新一轮。关闭后恢复超时中断';
   waitingField.querySelector('span')?.append(waitingDescription);
-  automationSection.append(autoField, promptOverrideField, smartRetryField, waitingField);
+  const backupField = field('备用预设自动并行生成', enableBackupPreset);
+  backupField.classList.add('stia-switch-field', 'stia-switch-field--row');
+  const backupDescription = document.createElement('small');
+  backupDescription.textContent = '默认关闭，仅适用于 GPT 免服务端直连。超过下方等待时长后，自动用备用预设再发一次，并弹出酒馆提示；主请求继续等待，两边回图都会保存。每个主任务只触发一次，备用任务不再触发备用；会产生额外生图请求。启用时主请求会继续等图，不受超时中断开关影响';
+  backupField.querySelector('span')?.append(backupDescription);
+  automationSection.append(autoField, promptOverrideField, smartRetryField, waitingField,
+    backupField, field('备用 API 预设', backupPresetSelector), field('备用生成等待时长（秒）', backupWaitSeconds));
 
   const appearanceSection = document.createElement('section');
   appearanceSection.className = 'stia-section';
@@ -1200,6 +1277,7 @@ export function createToolPanel({ api, store }) {
     novelAiEngine.setAttribute('aria-pressed', String(isNovelAi));
     executionMode.disabled = isNovelAi;
     if (isNovelAi) executionMode.value = 'direct';
+    syncBackupControls();
     createPreset.disabled = !isNovelAi && executionMode.value === 'server';
     deletePreset.disabled = !isNovelAi && executionMode.value === 'server';
     health.textContent = isNovelAi
@@ -1275,6 +1353,8 @@ export function createToolPanel({ api, store }) {
         enablePromptOverrideRegenerate: enablePromptOverrideRegenerate.checked,
         enableSmartRetry: enableSmartRetry.checked,
         keepWaitingOnTimeout: keepWaitingOnTimeout.checked,
+        ...normalizeBackupSettings({ enableBackupPreset: enableBackupPreset.checked,
+          backupPresetId: backupPresetSelector.value, backupWaitSeconds: backupWaitSeconds.value }),
         generationProvider: provider,
         executionMode: requestedMode,
         allowHttp: allowHttp.checked,
@@ -1342,6 +1422,10 @@ export function createToolPanel({ api, store }) {
       enablePromptOverrideRegenerate.checked = settings.enablePromptOverrideRegenerate === true;
       enableSmartRetry.checked = settings.enableSmartRetry === true;
       keepWaitingOnTimeout.checked = settings.keepWaitingOnTimeout !== false;
+      const backupOptions = normalizeBackupSettings(settings);
+      enableBackupPreset.checked = backupOptions.enableBackupPreset;
+      backupWaitSeconds.value = String(backupOptions.backupWaitSeconds);
+      updateBackupSelector(backupOptions.backupPresetId);
       themeMode.value = ['tavern', 'light', 'dark'].includes(settings.themeMode)
         ? settings.themeMode
         : 'tavern';
@@ -1386,6 +1470,7 @@ export function createToolPanel({ api, store }) {
     const serverMode = executionMode.value === 'server';
     createPreset.disabled = serverMode;
     deletePreset.disabled = serverMode;
+    syncBackupControls();
   });
 
   function showTab(name) {

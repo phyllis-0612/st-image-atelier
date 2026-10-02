@@ -79,7 +79,7 @@ test('总开关即时持久化，独立保存生图参数后立即更新当前�
       settings = { ...settings, ...patch };
       return clone(settings);
     },
-    getPresets: async () => ({ activePresetId: preset.id, items: [clone(preset)] }),
+    getPresets: async () => ({ activePresetId: preset.id, items: [clone(preset), { ...clone(preset), id: 'backup', name: '备用 API' }] }),
     updatePreset: async (_id, patch) => {
       presetPatches.push(clone(patch));
       preset = { ...preset, ...patch };
@@ -114,6 +114,27 @@ test('总开关即时持久化，独立保存生图参数后立即更新当前�
 
   await panel.load();
   assert.equal(enabled.checked, false, '重新打开设置后不应反弹为开启');
+
+  const backupPreset = document.querySelector('[aria-label="选择备用 API 预设"]');
+  const backupTime = controlFor('备用生成等待时长');
+  const backupToggle = controlFor('备用预设自动并行生成');
+  assert.equal(backupToggle.checked, false);
+  assert.equal(backupTime.value, '180');
+  assert.deepEqual([...backupPreset.options].map(option => option.value), ['', 'backup']);
+  backupPreset.value = 'backup';
+  backupPreset.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  await waitFor(() => settings.backupPresetId === 'backup', '备用选择没有保存');
+  backupTime.value = '73';
+  backupTime.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  await waitFor(() => settings.backupWaitSeconds === 73, '自定义时长没有保存');
+  backupToggle.checked = true;
+  backupToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  await waitFor(() => settings.enableBackupPreset === true, '备用开关没有保存');
+  await panel.load();
+  assert.equal(backupToggle.checked, true);
+  assert.equal(backupTime.value, '73');
+  assert.equal(backupPreset.value, 'backup');
+  assert.equal(store.state.preset.id, 'default');
 
   const size = controlFor('默认尺寸');
   const quality = controlFor('默认质量');

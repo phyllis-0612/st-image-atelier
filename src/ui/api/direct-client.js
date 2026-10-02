@@ -1,4 +1,5 @@
 import { generationWaitMessage } from '../../shared/generation-timeout.js';
+import { normalizeBackupSettings } from '../../shared/backup-generation.js';
 import {
   DEFAULT_ARTIST_PRESET,
   DEFAULT_NOVELAI_CONFIG,
@@ -127,6 +128,7 @@ function normalizeSettings(value = {}) {
     executionMode: merged.executionMode === 'server' ? 'server' : 'direct',
     themeMode: normalizeThemeMode(merged.themeMode),
     ...normalizeRetentionSettings(merged),
+    ...normalizeBackupSettings(merged),
   };
 }
 
@@ -513,7 +515,7 @@ export function createDirectApiClient({
     const provider = input.provider || namespace.settings.generationProvider || 'openai';
     const preset = provider === 'novelai'
       ? null
-      : clone(presetById(input.presetId) || activePreset());
+      : clone(input.presetId ? presetById(input.presetId) : activePreset());
     if (provider !== 'novelai' && !preset) {
       throw new DirectError('PRESET_NOT_CONFIGURED', '找不到所选 API 预设');
     }
@@ -526,6 +528,7 @@ export function createDirectApiClient({
     }
     const apiKey = provider === 'novelai' ? getNovelAiKey() : getApiKey(preset.id);
     const settings = clone(namespace.settings);
+    if (input.keepWaitingOnTimeout === true) settings.keepWaitingOnTimeout = true;
     await ensureGalleryReady();
     let found = findTag(input.tagId);
     if (!found) throw new DirectError('VALIDATION_FAILED', '找不到对应的生图标签');
@@ -541,6 +544,7 @@ export function createDirectApiClient({
       tagId: input.tagId,
       requestMode: input.requestMode,
       parallel: input.parallel === true,
+      backupForAttemptId: input.backupForAttemptId || null,
       provider,
       presetId: provider === 'novelai' ? 'novelai' : preset.id,
       presetNameSnapshot: provider === 'novelai' ? 'NovelAI' : preset.name,

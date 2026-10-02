@@ -131,7 +131,7 @@ export function createCard({
       const copy = document.createElement('span');
       copy.className = 'stia-card__task-copy';
       const name = document.createElement('strong');
-      name.textContent = `${attempt.presetNameSnapshot || attempt.model || '生成任务'} · ${String(attempt.attemptId || '').slice(-6)}`;
+      name.textContent = `${attempt.backupForAttemptId ? '备用 · ' : ''}${attempt.presetNameSnapshot || attempt.model || '生成任务'} · ${String(attempt.attemptId || '').slice(-6)}`;
       const status = document.createElement('small');
       status.textContent = attempt.statusMessage || STATUS_TEXT[attempt.status] || '处理中';
       copy.append(name, status);

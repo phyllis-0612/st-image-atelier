@@ -1,7 +1,9 @@
 import { createGenerationNotifications } from './generation-notifications.js';
 import { ACTIVE_STATUSES, upsertAttempt } from './generation-state.js';
+import { normalizeBackupSettings } from '../../shared/backup-generation.js';
 
-export function createGenerationRunner({ api, compat, store, uuid, runGalleryCleanup = () => {}, pollIntervalMs = 900 }) {
+export function createGenerationRunner({ api, compat, store, uuid, runGalleryCleanup = () => {}, pollIntervalMs = 900,
+  setTimer = setTimeout, clearTimer = clearTimeout }) {
   const running = new Map();
   function hasActive(tagId) {
     return Boolean(running.get(tagId)?.size)
@@ -41,31 +43,74 @@ export function createGenerationRunner({ api, compat, store, uuid, runGalleryCle
     const pending = running.get(tag.tagId) || new Set();
     pending.add(attemptId);
     running.set(tag.tagId, pending);
-    const provider = store.state.settings.generationProvider || 'openai';
+    const provider = overrides.provider || store.state.settings.generationProvider || 'openai';
+    const preset = overrides.preset || store.state.preset;
+    const presetId = overrides.presetId || preset?.id || 'default';
+    const backup = normalizeBackupSettings(store.state.settings);
+    const useBackup = backup.enableBackupPreset && provider === 'openai'
+      && api.mode?.() === 'direct' && backup.backupPresetId && backup.backupPresetId !== presetId
+      && !overrides.backupForAttemptId;
+    let settled = false;
+    let backupTimer;
     const prompt = Object.hasOwn(overrides, 'prompt') ? String(overrides.prompt || '') : tag.prompt;
     const optimisticAttempt = {
       attemptId,
       tagId: tag.tagId,
       requestMode: mode,
       parallel,
+      backupForAttemptId: overrides.backupForAttemptId || null,
       provider,
+      presetId,
+      presetNameSnapshot: preset?.name || '',
       model: provider === 'novelai'
         ? (store.state.novelAi?.model || '')
-        : (store.state.preset?.selectedModel || ''),
+        : (preset?.selectedModel || ''),
       status: 'generating',
       promptSnapshot: prompt,
       createdAt: new Date().toISOString(),
     };
     const current = store.state.tagStates.get(tag.tagId) || { tagId: tag.tagId, attempts: [], results: [] };
     store.setTag(tag.tagId, { ...current, attempts: [optimisticAttempt, ...(current.attempts || [])] });
+    function backupAllowed() {
+      return !settled && store.state.settings.enableBackupPreset === true
+        && api.mode?.() === 'direct' && running.get(tag.tagId)?.has(attemptId);
+    }
+    async function launchBackup() {
+      if (!backupAllowed()) return;
+      const main = await api.attempt(attemptId);
+      if (!backupAllowed() || !['queued', 'generating'].includes(main.status)) return;
+      const { items = [] } = await api.getPresets();
+      if (!backupAllowed()) return;
+      const selected = items.find(item => item.id === backup.backupPresetId);
+      if (!selected?.baseUrl || !selected?.selectedModel || !selected?.hasApiKey) {
+        compat.notify?.('warning', '备用预设已删除或尚未配置地址、模型和 Key，本次未启动备用生成。', '画笺 · 备用生成未启动');
+        return;
+      }
+      const latest = await api.attempt(attemptId);
+      if (!backupAllowed() || !['queued', 'generating'].includes(latest.status)) return;
+      compat.notify?.('warning', `主请求已等待 ${backup.backupWaitSeconds} 秒，正在用“${selected.name}”并行重 roll；原请求继续等待，两边的图片都会保存。`, '画笺 · 启用备用预设');
+      void generate({ ...tag }, 'manual', {
+        ...overrides, prompt, provider: 'openai', presetId: selected.id, preset: selected,
+        backupForAttemptId: attemptId, keepWaitingOnTimeout: true,
+      });
+    }
     try {
+      if (useBackup) {
+        backupTimer = setTimer(() => {
+          void launchBackup().catch(error => {
+            if (backupAllowed()) compat.notify?.('warning', `备用生成未启动：${error.message}`, '画笺');
+          });
+        }, backup.backupWaitSeconds * 1000);
+      }
       const attempt = await api.generate({
         tagId: tag.tagId,
         attemptId,
         requestMode: mode,
         parallel,
+        backupForAttemptId: overrides.backupForAttemptId || null,
+        ...(useBackup || overrides.keepWaitingOnTimeout ? { keepWaitingOnTimeout: true } : {}),
         provider,
-        presetId: store.state.preset?.id || 'default',
+        presetId,
         artistPresetId: store.state.artistPreset?.id || 'default',
         prompt,
         ...(Object.hasOwn(overrides, 'negativePromptOverride')
@@ -85,6 +130,7 @@ export function createGenerationRunner({ api, compat, store, uuid, runGalleryCle
         },
       });
       if (['succeeded', 'failed', 'interrupted', 'cancelled'].includes(attempt.status)) {
+        settled = true;
         if (attempt.status === 'failed' || attempt.status === 'interrupted') {
           notifications.failed(attempt, attempt.retryCount);
         }
@@ -93,12 +139,14 @@ export function createGenerationRunner({ api, compat, store, uuid, runGalleryCle
         return attempt;
       }
       const completed = await waitForAttempt(attempt.attemptId, tag.tagId, notifications.progress);
+      settled = true;
       if (completed.status === 'failed' || completed.status === 'interrupted') {
         notifications.failed(completed, completed.retryCount);
       }
       if (completed.status === 'succeeded') void runGalleryCleanup();
       return completed;
     } catch (error) {
+      settled = true;
       try {
         await refreshTag(tag.tagId);
       } catch {
@@ -116,6 +164,8 @@ export function createGenerationRunner({ api, compat, store, uuid, runGalleryCle
       console.warn('[画笺] 生图失败', error);
       return store.state.tagStates.get(tag.tagId)?.attempts?.find(item => item.attemptId === attemptId) || optimisticAttempt;
     } finally {
+      settled = true;
+      if (backupTimer !== undefined) clearTimer(backupTimer);
       const pending = running.get(tag.tagId);
       pending?.delete(attemptId);
       if (!pending?.size) running.delete(tag.tagId);
