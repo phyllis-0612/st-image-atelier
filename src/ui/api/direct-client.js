@@ -1,3 +1,4 @@
+import { generationWaitMessage } from '../../shared/generation-timeout.js';
 import {
   DEFAULT_ARTIST_PRESET,
   DEFAULT_NOVELAI_CONFIG,
@@ -354,7 +355,10 @@ export function createDirectApiClient({
     const index = found.tag.attempts.findIndex(item => item.attemptId === attempt.attemptId);
     if (index >= 0) found.tag.attempts[index] = clone(attempt);
     else found.tag.attempts.unshift(clone(attempt));
-    found.tag.attempts = found.tag.attempts.slice(0, 50);
+    const active = found.tag.attempts.filter(item => ACTIVE_STATUSES.has(item.status));
+    const history = found.tag.attempts.filter(item => !ACTIVE_STATUSES.has(item.status)).slice(0, 50);
+    const retained = new Set([...active, ...history].map(item => item.attemptId));
+    found.tag.attempts = found.tag.attempts.filter(item => retained.has(item.attemptId));
     if (attempt.requestMode === 'auto') found.tag.autoAttempted = true;
     await compat.save();
     return found;
@@ -506,11 +510,6 @@ export function createDirectApiClient({
   }
 
   async function generate(input) {
-    await ensureGalleryReady();
-    let found = findTag(input.tagId);
-    if (!found) throw new DirectError('VALIDATION_FAILED', '找不到对应的生图标签');
-    const existing = found.tag.attempts?.find(item => item.attemptId === input.attemptId);
-    if (existing) return clone(existing);
     const provider = input.provider || namespace.settings.generationProvider || 'openai';
     const preset = provider === 'novelai'
       ? null
@@ -526,6 +525,13 @@ export function createDirectApiClient({
       throw new DirectError('PRESET_NOT_CONFIGURED', '找不到所选画师串预设');
     }
     const apiKey = provider === 'novelai' ? getNovelAiKey() : getApiKey(preset.id);
+    const settings = clone(namespace.settings);
+    await ensureGalleryReady();
+    let found = findTag(input.tagId);
+    if (!found) throw new DirectError('VALIDATION_FAILED', '找不到对应的生图标签');
+    const existing = found.tag.attempts?.find(item => item.attemptId === input.attemptId);
+    if (existing) return clone(existing);
+
     const requestedSize = provider === 'novelai'
       ? (novelAi.ratioMap?.[input.parameters?.ratio] || novelAi.defaultSize)
       : (preset.ratioMap?.[input.parameters?.ratio] || preset.defaultSize);
@@ -534,6 +540,7 @@ export function createDirectApiClient({
       attemptId: input.attemptId,
       tagId: input.tagId,
       requestMode: input.requestMode,
+      parallel: input.parallel === true,
       provider,
       presetId: provider === 'novelai' ? 'novelai' : preset.id,
       presetNameSnapshot: provider === 'novelai' ? 'NovelAI' : preset.name,
@@ -570,6 +577,12 @@ export function createDirectApiClient({
     const saved = [];
     try {
       let sources;
+      const onTimeout = async timeoutMs => {
+        if (attempt.status !== 'generating' || controller.signal.aborted) return;
+        attempt.statusMessage = generationWaitMessage(timeoutMs);
+        found = await persistAttempt(found, attempt);
+        if (attempt.status === 'generating' && !controller.signal.aborted) input.onProgress?.(clone(attempt));
+      };
       const onRetry = async retry => {
         attempt.retryCount = retry.retryCount;
         attempt.retryNotice = retry;
@@ -585,9 +598,10 @@ export function createDirectApiClient({
           artistNegativePrompt: artistPreset.negativePrompt,
           prompt: input.prompt,
           parameters: attempt.parameters,
-          settings: namespace.settings,
+          settings,
           signal: controller.signal,
           onRetry,
+          onTimeout,
           retryDelays,
         });
         sources = generated.sources;
@@ -600,9 +614,10 @@ export function createDirectApiClient({
           apiKey,
           prompt: input.prompt,
           parameters: attempt.parameters,
-          settings: namespace.settings,
+          settings,
           signal: controller.signal,
           onRetry,
+          onTimeout,
           retryDelays,
           onCompatibilityRetry: async retry => {
             attempt.compatibilityRetry = retry;
@@ -809,7 +824,7 @@ export function createDirectApiClient({
     mode: () => namespace.settings.executionMode || 'direct',
     health: async () => ({
       mode: 'direct',
-      version: '1.6.3',
+      version: '1.6.7',
       corsRequired: true,
       storage: 'sillytavern-images',
     }),

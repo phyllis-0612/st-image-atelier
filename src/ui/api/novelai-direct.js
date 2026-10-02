@@ -1,3 +1,4 @@
+import { startGenerationTimeout } from '../../shared/generation-timeout.js';
 import { runGenerationWithRetry } from '../../shared/generation-retry.js';
 import {
   DirectError,
@@ -436,12 +437,13 @@ function mapNovelAiError(status, text) {
   );
 }
 
-async function fetchNovelAi(url, options, timeoutMs, maxImageBytes) {
+async function fetchNovelAi(url, options, timeoutMs, maxImageBytes, wait = {}) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+  const clearDeadline = startGenerationTimeout({ controller, timeoutMs, ...wait });
   const externalSignal = options.signal;
   const abort = () => controller.abort(externalSignal.reason);
-  externalSignal?.addEventListener('abort', abort, { once: true });
+  if (externalSignal?.aborted) abort();
+  else externalSignal?.addEventListener('abort', abort, { once: true });
   try {
     const response = await fetch(url, { ...options, signal: controller.signal, redirect: 'error' });
     if (!response.ok) throw mapNovelAiError(response.status, (await response.text()).slice(0, 1000));
@@ -497,7 +499,7 @@ async function fetchNovelAi(url, options, timeoutMs, maxImageBytes) {
     }
     throw new DirectError('DIRECT_FETCH_BLOCKED', error?.message || 'Failed to fetch', 0, true);
   } finally {
-    clearTimeout(timer);
+    clearDeadline();
     externalSignal?.removeEventListener('abort', abort);
   }
 }
@@ -513,6 +515,7 @@ export async function generateNovelAiImages({
   signal,
   onRetry,
   retryDelays,
+  onTimeout,
 }) {
   if (!config?.baseUrl) throw new DirectError('PRESET_NOT_CONFIGURED', 'NAI 中转站 / 站点未配置');
   if (!apiKey) throw new DirectError('API_KEY_MISSING', '缺少 NAI 中转站 Key / Token');
@@ -540,7 +543,7 @@ export async function generateNovelAiImages({
       },
       body: JSON.stringify(built.body),
       signal,
-    }, config.timeoutMs || 180_000, settings.maxImageBytes || 30 * 1024 * 1024),
+    }, config.timeoutMs || 180_000, settings.maxImageBytes || 30 * 1024 * 1024, { keepWaiting: settings?.keepWaitingOnTimeout !== false, onTimeout }),
   });
   return {
     sources,

@@ -1,4 +1,6 @@
 'use strict';
+
+const { startGenerationTimeout } = require('../utils/generation-timeout');
 const { runGenerationWithRetry } = require('../utils/generation-retry');
 
 const { AppError } = require('../utils/errors');
@@ -88,9 +90,9 @@ function mapStatus(status, bodyText) {
   return error;
 }
 
-async function fetchJson(url, options, timeoutMs) {
+async function fetchJson(url, options, timeoutMs, wait = {}) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+  const clearDeadline = startGenerationTimeout({ controller, timeoutMs, ...wait });
   const externalSignal = options.signal;
   const abort = () => controller.abort(externalSignal.reason);
   if (externalSignal?.aborted) abort();
@@ -111,7 +113,7 @@ async function fetchJson(url, options, timeoutMs) {
     }
     throw new AppError('UPSTREAM_HTTP_ERROR', error.message, 502, true);
   } finally {
-    clearTimeout(timer);
+    clearDeadline();
     externalSignal?.removeEventListener('abort', abort);
   }
 }
@@ -153,7 +155,7 @@ function detectCompatibilityRetry(error, body = {}) {
   };
 }
 
-async function generate({ preset, apiKey, prompt, parameters, settings, signal, onCompatibilityRetry, onRetry, retryDelays }) {
+async function generate({ preset, apiKey, prompt, parameters, settings, signal, onCompatibilityRetry, onRetry, retryDelays, onTimeout }) {
   if (!preset.baseUrl) throw new AppError('PRESET_NOT_CONFIGURED');
   if (!apiKey) throw new AppError('API_KEY_MISSING');
   if (!preset.selectedModel) throw new AppError('MODEL_NOT_SELECTED');
@@ -175,7 +177,7 @@ async function generate({ preset, apiKey, prompt, parameters, settings, signal, 
     headers: { 'Content-Type': 'application/json', ...authorization(apiKey) },
     body: JSON.stringify(payloadBody),
     signal,
-  }, preset.timeoutMs);
+  }, preset.timeoutMs, { keepWaiting: settings?.keepWaitingOnTimeout !== false, onTimeout });
   let compatibilityRetry;
   try {
     const payload = await runGenerationWithRetry({

@@ -45,6 +45,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   autoGenerate: false,
   enablePromptOverrideRegenerate: false,
   enableSmartRetry: false,
+  keepWaitingOnTimeout: true,
   generationProvider: 'openai',
   executionMode: 'direct',
   themeMode: 'tavern',

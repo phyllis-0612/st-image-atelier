@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { Writable } from 'node:stream';
 import { finished } from 'node:stream/promises';
-import { startMockUpstream } from '../mocks/mock-upstream.js';
+import { startMockUpstream, PNG_BASE64 } from '../mocks/mock-upstream.js';
 
 const require = createRequire(import.meta.url);
 const { PresetService } = require('../../server-plugin/src/services/preset');
@@ -25,6 +25,47 @@ async function waitForAttempt(metadata, attemptId) {
   }
   throw new Error('attempt timeout');
 }
+
+test('服务端换 Key 并行生成，后发请求先完成、旧请求迟到时合并两张图', async t => {
+  const f = await fixture(t);
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    if (String(url).endsWith('/v1/images/generations')) {
+      return new Promise(resolve => requests.push({ key: options.headers.Authorization, signal: options.signal,
+        finish: () => resolve(new Response(JSON.stringify({ data: [{ b64_json: PNG_BASE64 }] }), { headers: { 'Content-Type': 'application/json' } })) }));
+    }
+    return originalFetch(url, options);
+  };
+  const readPreset = f.preset.get.bind(f.preset);
+  f.preset.get = async () => ({ ...(await readPreset()), timeoutMs: 5 });
+  const old = request('old image');
+  await f.generation.generate(old);
+  await f.preset.update({ apiKey: 'key-new' });
+  const newer = { ...request('new image', { tagId: old.tagId }), parallel: true };
+  await f.generation.generate(newer);
+  for (let index = 0; requests.length < 2 && index < 100; index++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests.map(item => item.key), ['Bearer sk-test', 'Bearer key-new']);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(requests.every(item => !item.signal.aborted), true);
+  assert.match(f.metadata.getAttempt(old.attemptId).statusMessage, /仍在等待/);
+  requests[1].finish();
+  const newResult = await waitForAttempt(f.metadata, newer.attemptId);
+  assert.equal(newResult.status, 'succeeded');
+  assert.equal(f.metadata.getAttempt(old.attemptId).status, 'generating');
+  requests[0].finish();
+  const oldResult = await waitForAttempt(f.metadata, old.attemptId);
+  assert.equal(oldResult.status, 'succeeded');
+  const tag = f.metadata.getTag(old.tagId);
+  assert.equal(tag.resultIds.length, 2);
+  assert.equal(tag.latestResultId, oldResult.resultIds[0]);
+  assert.ok(tag.resultIds.includes(newResult.resultIds[0]));
+  assert.equal((await f.generation.resolveTags([old.tagId]))[0].results.length, 2);
+  const reloaded = await new MetadataStore(f.root).initialize();
+  assert.deepEqual(reloaded.getTag(old.tagId).resultIds, tag.resultIds);
+});
 
 async function fixture(t) {
   const upstream = await startMockUpstream();
@@ -232,10 +273,10 @@ test('服务器模式持久化两个新开关，旧设置默认关闭', async t 
   assert.equal(settings.enableSmartRetry, true);
 });
 
-test('上游超时映射为可重试中文错误', async t => {
+test('关闭继续等待后，上游超时映射为可重试中文错误', async t => {
   const f = await fixture(t);
   const preset = { ...(await f.preset.get()), timeoutMs: 20 };
-  const settings = await f.preset.getSettings();
+  const settings = { ...(await f.preset.getSettings()), keepWaitingOnTimeout: false };
   await assert.rejects(
     adapter.generate({
       preset,

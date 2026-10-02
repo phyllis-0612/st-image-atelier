@@ -4,6 +4,44 @@ import { JSDOM } from 'jsdom';
 import { createMessageRenderer } from '../../src/ui/renderer/message-renderer.js';
 import { createStore } from '../../src/ui/state/store.js';
 
+for (const first of ['old', 'new']) {
+  test(`并行请求 ${first} 先回图时立即显示，另一条仍可取消和重 roll`, t => {
+    const { container, state, store, generated } = setup(t);
+    const older = { attemptId: 'old', status: 'generating', createdAt: '2026-10-02T00:00:00Z', model: 'old-model', parameters: { size: '768x1152' } };
+    const newer = { attemptId: 'new', status: 'generating', parallel: true, createdAt: '2026-10-02T00:00:01Z', model: 'new-model', parameters: { size: '1024x1024' } };
+    state.attempts = [newer, older];
+    state.results = [];
+    state.tag.latestResultId = null;
+    store.setTag('tag-1', state);
+    const card = container.querySelector('.stia-card');
+    assert.match(card.textContent, /2 个生成任务并行/);
+    assert.equal(card.querySelectorAll('.stia-card__task').length, 2);
+    const winner = first === 'old' ? older : newer;
+    const loser = first === 'old' ? newer : older;
+    winner.status = 'succeeded';
+    state.tag.latestResultId = `result-${first}`;
+    state.results.push({ resultId: `result-${first}`, attemptId: winner.attemptId, status: 'available', prompt: 'winner' });
+    store.setTag('tag-1', state);
+    const image = card.querySelector('img');
+    assert.equal(image.getAttribute('src'), `/images/result-${first}.png`);
+    assert.match(card.textContent, /仍有 1 个任务在生成/);
+    assert.equal(card.querySelectorAll('.stia-card__task').length, 1);
+    [...card.querySelectorAll('button')].find(item => item.textContent.includes('并行重 roll')).click();
+    assert.equal(generated.length, 1);
+    loser.statusMessage = '迟到图片仍在等待';
+    store.setTag('tag-1', state);
+    assert.equal(card.querySelector('img'), image, '其他并行任务更新不应摘下已返回的图片');
+    loser.status = 'succeeded';
+    state.tag.latestResultId = `result-${loser.attemptId}`;
+    state.results.push({ resultId: state.tag.latestResultId, attemptId: loser.attemptId, status: 'available', prompt: 'late image' });
+    store.setTag('tag-1', state);
+    assert.equal(card.querySelector('img').getAttribute('src'), `/images/result-${loser.attemptId}.png`);
+    assert.match(card.textContent, /历史 2 张/);
+    assert.equal(card.querySelector('.stia-card__pending'), null);
+    assert.equal(card.querySelector('.stia-card__size').textContent, loser.parameters.size.replace('x', '×'));
+  });
+}
+
 function setup(t, html = '<p>正文之前</p><draw>cat by a window</draw><p>正文之后</p>') {
   const dom = new JSDOM('<!DOCTYPE html><div class="mes"><div class="mes_text"></div></div>', {
     url: 'http://localhost',

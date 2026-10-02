@@ -1,3 +1,4 @@
+import { startGenerationTimeout } from '../../shared/generation-timeout.js';
 import { runGenerationWithRetry } from '../../shared/generation-retry.js';
 
 const ERROR_MESSAGES = {
@@ -162,9 +163,9 @@ function mapStatus(status, bodyText) {
   );
 }
 
-export async function fetchJson(url, options, timeoutMs) {
+export async function fetchJson(url, options, timeoutMs, wait = {}) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+  const clearDeadline = startGenerationTimeout({ controller, timeoutMs, ...wait });
   const externalSignal = options.signal;
   const abort = () => controller.abort(externalSignal.reason);
   if (externalSignal?.aborted) abort();
@@ -185,7 +186,7 @@ export async function fetchJson(url, options, timeoutMs) {
     }
     throw new DirectError('DIRECT_FETCH_BLOCKED', error?.message || 'Failed to fetch', 0, true);
   } finally {
-    clearTimeout(timer);
+    clearDeadline();
     externalSignal?.removeEventListener('abort', abort);
   }
 }
@@ -232,6 +233,7 @@ export async function generateImages({
   onCompatibilityRetry,
   onRetry,
   retryDelays,
+  onTimeout,
 }) {
   if (!preset.baseUrl) throw new DirectError('PRESET_NOT_CONFIGURED');
   if (!apiKey) throw new DirectError('API_KEY_MISSING');
@@ -258,7 +260,7 @@ export async function generateImages({
     headers: { 'Content-Type': 'application/json', ...authorization(apiKey) },
     body: JSON.stringify(payloadBody),
     signal,
-  }, preset.timeoutMs);
+  }, preset.timeoutMs, { keepWaiting: settings?.keepWaitingOnTimeout !== false, onTimeout });
   let compatibilityRetry;
   try {
     const payload = await runGenerationWithRetry({

@@ -1293,3 +1293,10 @@
 .stia-actions--fill > .stia-card__remove {
   flex: 0 0 auto;
 }
+
+/* 并行生图状态只作用于画笺卡片。 */
+.stia-card__pending { display: grid; gap: 8px; }
+.stia-card__task { display: flex; align-items: center; gap: 8px; }
+.stia-card__task-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.stia-card__task-copy strong { display: block; font-size: 12px; font-weight: 500; }
+.stia-card__task-copy small { display: block; color: var(--stia-muted); font-size: 11px; }

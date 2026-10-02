@@ -436,6 +436,7 @@ export function createMessageRenderer(dependencies) {
       onGenerate: actions.generate,
       onAdjustRegenerate: actions.adjustRegenerate,
       onOpenGallery: actions.openGallery,
+      onOpenSettings: actions.openSettings,
       onCancel: actions.cancel,
       onRemove: actions.remove,
     });

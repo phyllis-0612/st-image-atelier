@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { generationWaitMessage } = require('../utils/generation-timeout');
 const adapter = require('../adapters/openai-images');
 const { AppError, publicError } = require('../utils/errors');
 const { assertUuidLike, validatePrompt } = require('../utils/validation');
@@ -70,6 +71,7 @@ class GenerationService {
       attemptId,
       tagId,
       requestMode,
+      parallel: input.parallel === true,
       presetId: 'default',
       presetNameSnapshot: preset.name,
       model: preset.selectedModel,
@@ -97,9 +99,11 @@ class GenerationService {
       updatedAt: timestamp(),
       schemaVersion: 1,
     };
-    if (requestMode === 'auto') tag.autoAttempted = true;
-    await this.metadata.putTag(tag);
-    await this.metadata.putAttempt(attempt);
+    await this.metadata.transaction(index => {
+      index.tags[tagId] ||= tag;
+      if (requestMode === 'auto') index.tags[tagId].autoAttempted = true;
+      index.attempts[attemptId] = attempt;
+    });
 
     const controller = new AbortController();
     this.running.set(attemptId, controller);
@@ -120,6 +124,11 @@ class GenerationService {
         parameters,
         signal: controller.signal,
         retryDelays: this.retryDelays,
+        onTimeout: async timeoutMs => {
+          if (attempt.status !== 'generating' || controller.signal.aborted) return;
+          attempt.statusMessage = generationWaitMessage(timeoutMs);
+          await this.metadata.putAttempt(attempt);
+        },
         onRetry: async retry => {
           attempt.retryCount = retry.retryCount;
           attempt.retryNotice = retry;
@@ -164,15 +173,19 @@ class GenerationService {
         };
         await this.metadata.putResult(result);
         attempt.resultIds.push(resultId);
-        tag.resultIds.push(resultId);
-        tag.latestResultId = resultId;
       }
+      if (controller.signal.aborted) throw new AppError('ATTEMPT_INTERRUPTED', '用户已取消');
       attempt.status = 'succeeded';
       attempt.completedAt = timestamp();
       tag.updatedAt = timestamp();
       await this.metadata.transaction(index => {
+        if (controller.signal.aborted) throw new AppError('ATTEMPT_INTERRUPTED', '用户已取消');
         index.attempts[attempt.attemptId] = attempt;
-        index.tags[tag.tagId] = tag;
+        const current = index.tags[tag.tagId] || { ...tag, resultIds: [] };
+        current.resultIds = [...new Set([...(current.resultIds || []), ...attempt.resultIds])];
+        current.latestResultId = attempt.resultIds.at(-1) || current.latestResultId;
+        current.updatedAt = timestamp();
+        index.tags[tag.tagId] = current;
       });
     } catch (error) {
       for (const resultId of attempt.resultIds) {

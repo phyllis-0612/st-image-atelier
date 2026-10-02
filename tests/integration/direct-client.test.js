@@ -5,6 +5,97 @@ import { createDirectApiClient } from '../../src/ui/api/direct-client.js';
 import { createMemoryGalleryMetadataStore } from '../../src/ui/api/gallery-metadata-store.js';
 import { PNG_BASE64, startMockUpstream } from '../mocks/mock-upstream.js';
 import { createGenerationNotifications } from '../../src/ui/state/generation-notifications.js';
+import { createGenerationRunner } from '../../src/ui/state/generation-runner.js';
+import { createStore } from '../../src/ui/state/store.js';
+
+async function waitUntil(predicate) {
+  for (let index = 0; index < 200; index++) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error('等待测试请求超时');
+}
+
+async function concurrentFixture(t) {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const requests = [];
+  const uploads = [];
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/images/upload') {
+      const input = JSON.parse(options.body);
+      uploads.push(input.filename);
+      return response(200, { path: `user/images/${input.filename}.${input.format}` });
+    }
+    if (url === '/api/images/delete') return response(200, {});
+    return new Promise((resolve, reject) => {
+      requests.push({ key: options.headers.Authorization, signal: options.signal,
+        finish: () => resolve(response(200, { data: [{ b64_json: PNG_BASE64 }] })) });
+      options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+    });
+  };
+  const tag = { tagId: crypto.randomUUID(), prompt: 'original', ordinal: 0, attempts: [], resultIds: [] };
+  const message = { mes: '<draw>original</draw>', extra: { stImageAtelier: { tags: [tag] } } };
+  const keys = new Map();
+  const compat = { chat: () => [message], save: async () => {}, headers: () => ({}), currentChatId: () => 'chat', notify() {} };
+  const client = createDirectApiClient({ compat, extensionSettings: {}, saveSettingsDebounced() {},
+    galleryStore: createMemoryGalleryMetadataStore(),
+    keyStorage: { getItem: key => keys.get(key), setItem: (key, value) => keys.set(key, value) } });
+  await client.updatePreset({ baseUrl: 'https://example.com', apiKey: 'key-old', selectedModel: 'image', timeoutMs: 5 });
+  const store = createStore();
+  const runner = createGenerationRunner({ api: client, compat, store, uuid: () => crypto.randomUUID() });
+  return { client, runner, store, tag, requests, uploads };
+}
+
+for (const first of [0, 1]) {
+  test(`直连换 Key 并行生成，第 ${first + 1} 个请求先回图，两次结果和历史都保留`, async t => {
+    const f = await concurrentFixture(t);
+    const old = f.runner.generate(f.tag, 'manual');
+    // Change credentials before the first async initialization completes.
+    await f.client.updatePreset({ apiKey: 'key-new' });
+    await waitUntil(() => f.requests.length === 1);
+    const newer = f.runner.generate(f.tag, 'manual');
+    await waitUntil(() => f.requests.length === 2);
+    assert.deepEqual(f.requests.map(item => item.key), ['Bearer key-old', 'Bearer key-new']);
+    await waitUntil(() => f.tag.attempts.every(item => item.statusMessage?.includes('仍在等待')));
+    assert.equal(f.requests.every(item => !item.signal.aborted), true);
+    assert.equal(f.requests.length, 2, '等待提醒不额外扣费重发');
+    const works = [old, newer];
+    f.requests[first].finish();
+    const initial = await works[first];
+    assert.equal(initial.status, 'succeeded');
+    assert.equal(f.runner.hasActive(f.tag.tagId), true);
+    let [state] = await f.client.resolveTags([f.tag.tagId]);
+    assert.equal(state.results.length, 1);
+    assert.equal(state.attempts.filter(item => item.status === 'generating').length, 1);
+    const second = 1 - first;
+    f.requests[second].finish();
+    const later = await works[second];
+    [state] = await f.client.resolveTags([f.tag.tagId]);
+    assert.equal(state.results.length, 2);
+    assert.equal(state.tag.resultIds.length, 2);
+    assert.equal(state.tag.latestResultId, later.resultIds[0]);
+    assert.equal(f.uploads.length, 2);
+    assert.equal(f.runner.hasActive(f.tag.tagId), false);
+    assert.ok(state.attempts.every(item => !JSON.stringify(item).includes('key-old') && !JSON.stringify(item).includes('key-new')));
+  });
+}
+
+test('取消一条并行请求不影响另一条请求回图', async t => {
+  const f = await concurrentFixture(t);
+  const old = f.runner.generate(f.tag, 'manual');
+  const newer = f.runner.generate(f.tag, 'manual');
+  await waitUntil(() => f.requests.length === 2);
+  const newestId = f.tag.attempts[0].attemptId;
+  await f.client.cancel(newestId);
+  assert.equal((await newer).status, 'cancelled');
+  assert.equal(f.requests[0].signal.aborted, false);
+  f.requests[0].finish();
+  assert.equal((await old).status, 'succeeded');
+  const [state] = await f.client.resolveTags([f.tag.tagId]);
+  assert.equal(state.results.length, 1);
+  assert.equal(state.attempts.find(item => item.attemptId === newestId).status, 'cancelled');
+});
 
 function response(status, payload) {
   return new Response(JSON.stringify(payload), {

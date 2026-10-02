@@ -130,6 +130,7 @@ export function createToolPanel({ api, store }) {
   const autoGenerate = input('checkbox');
   const enablePromptOverrideRegenerate = input('checkbox');
   const enableSmartRetry = input('checkbox');
+  const keepWaitingOnTimeout = input('checkbox');
   const themeMode = select([
     ['tavern', '跟随酒馆主题'],
     ['light', '日间模式'],
@@ -187,7 +188,7 @@ export function createToolPanel({ api, store }) {
   ]);
   const timeout = input('number');
   timeout.min = '30';
-  timeout.max = '600';
+  timeout.max = '3600';
   const extraBody = document.createElement('textarea');
   extraBody.rows = 4;
   extraBody.placeholder = '{"background":"transparent"}';
@@ -235,7 +236,7 @@ export function createToolPanel({ api, store }) {
   novelAiSeed.placeholder = '-1 表示随机';
   const novelAiTimeout = input('number');
   novelAiTimeout.min = '30';
-  novelAiTimeout.max = '600';
+  novelAiTimeout.max = '3600';
   const novelAiNegative = document.createElement('textarea');
   novelAiNegative.rows = 4;
   novelAiNegative.placeholder = '所有画师预设都会附加的全局负面词；通常留空';
@@ -400,6 +401,14 @@ export function createToolPanel({ api, store }) {
       'enableSmartRetry',
       '生成失败后智能重试已开启',
       '生成失败后智能重试已关闭',
+    );
+  });
+
+  keepWaitingOnTimeout.addEventListener('change', () => {
+    void persistBooleanSetting(
+      keepWaitingOnTimeout, 'keepWaitingOnTimeout',
+      '超时后继续等待已开启，原请求不会因等待提醒而中断',
+      '已恢复超时中断模式',
     );
   });
 
@@ -1043,7 +1052,7 @@ export function createToolPanel({ api, store }) {
   novelAiAdvancedGrid.append(
     field('Guidance Rescale', novelAiCfgRescale),
     field('生图路径', novelAiGenerationPath),
-    field('超时（秒）', novelAiTimeout),
+    field('等待提醒 / 超时（秒）', novelAiTimeout),
     field('全局附加负面提示词（所有预设共用，可留空）', novelAiNegative),
   );
   novelAiAdvanced.append(novelAiAdvancedSummary, novelAiAdvancedGrid);
@@ -1079,7 +1088,12 @@ export function createToolPanel({ api, store }) {
   const smartRetryDescription = document.createElement('small');
   smartRetryDescription.textContent = '首次失败后最多自动重试 3 次（含参数兼容回退）；暂时性网络、超时、限流和 5xx 错误会间隔重试。达到上限即停止；取消、审核、密钥或余额错误不重试。生图失败会显示酒馆横幅提醒';
   smartRetryField.querySelector('span')?.append(smartRetryDescription);
-  automationSection.append(autoField, promptOverrideField, smartRetryField);
+  const waitingField = field('超时后继续等待图片', keepWaitingOnTimeout);
+  waitingField.classList.add('stia-switch-field', 'stia-switch-field--row');
+  const waitingDescription = document.createElement('small');
+  waitingDescription.textContent = '默认开启：达到预设时间只提醒，不中断也不因等待过久而重发。可在生成卡片点“并行重 roll”，旧请求继续跑；先保存新 Key 或切换 API 预设，再发起新一轮。关闭后恢复超时中断';
+  waitingField.querySelector('span')?.append(waitingDescription);
+  automationSection.append(autoField, promptOverrideField, smartRetryField, waitingField);
 
   const appearanceSection = document.createElement('section');
   appearanceSection.className = 'stia-section';
@@ -1163,7 +1177,7 @@ export function createToolPanel({ api, store }) {
     field('运行模式', executionMode),
     field('模型列表路径', modelsPath),
     field('生图路径', generationPath),
-    field('超时（秒）', timeout),
+    field('等待提醒 / 超时（秒）', timeout),
     field('图片返回格式', responseFormat),
     field('额外请求参数 JSON', extraBody),
     warning,
@@ -1260,6 +1274,7 @@ export function createToolPanel({ api, store }) {
         autoGenerate: autoGenerate.checked,
         enablePromptOverrideRegenerate: enablePromptOverrideRegenerate.checked,
         enableSmartRetry: enableSmartRetry.checked,
+        keepWaitingOnTimeout: keepWaitingOnTimeout.checked,
         generationProvider: provider,
         executionMode: requestedMode,
         allowHttp: allowHttp.checked,
@@ -1326,6 +1341,7 @@ export function createToolPanel({ api, store }) {
       autoGenerate.checked = settings.autoGenerate;
       enablePromptOverrideRegenerate.checked = settings.enablePromptOverrideRegenerate === true;
       enableSmartRetry.checked = settings.enableSmartRetry === true;
+      keepWaitingOnTimeout.checked = settings.keepWaitingOnTimeout !== false;
       themeMode.value = ['tavern', 'light', 'dark'].includes(settings.themeMode)
         ? settings.themeMode
         : 'tavern';

@@ -1,6 +1,6 @@
 import { makeImageSaveable, openImageViewer } from '../media/image-viewer.js';
 
-const ACTIVE_STATUSES = new Set(['queued', 'generating', 'downloading', 'saving']);
+import { ACTIVE_STATUSES } from '../state/generation-state.js';
 
 const STATUS_TEXT = {
   queued: '排队中',
@@ -71,6 +71,7 @@ export function createCard({
   onGenerate,
   onAdjustRegenerate,
   onOpenGallery,
+  onOpenSettings,
   onCancel,
   onRemove,
 }) {
@@ -112,12 +113,49 @@ export function createCard({
     return button('删除', 'stia-button--ghost stia-card__remove', () => onRemove(tag), '×');
   }
 
+  function pendingControls(attempts, { showRoll = true } = {}) {
+    const pending = document.createElement('div');
+    pending.className = 'stia-card__pending';
+    const hint = document.createElement('small');
+    hint.className = 'stia-muted';
+    hint.textContent = `仍有 ${attempts.length} 个任务在生成；并行重 roll 不会停止旧请求，返回的图片都会保存`;
+    pending.append(hint);
+    const actions = document.createElement('div');
+    actions.className = 'stia-actions stia-actions--fill';
+    if (showRoll) actions.append(button('并行重 roll', 'stia-button--primary', () => onGenerate(tag, 'manual'), '↻'));
+    if (onOpenSettings) actions.append(button('换 Key / 预设', 'stia-button--ghost', onOpenSettings, '⚙'));
+    pending.append(actions);
+    for (const attempt of attempts) {
+      const row = document.createElement('div');
+      row.className = 'stia-card__task';
+      const copy = document.createElement('span');
+      copy.className = 'stia-card__task-copy';
+      const name = document.createElement('strong');
+      name.textContent = `${attempt.presetNameSnapshot || attempt.model || '生成任务'} · ${String(attempt.attemptId || '').slice(-6)}`;
+      const status = document.createElement('small');
+      status.textContent = attempt.statusMessage || STATUS_TEXT[attempt.status] || '处理中';
+      copy.append(name, status);
+      const cancelLabel = attempts.length === 1 ? (attempt.status === 'queued' ? '取消排队' : '取消') : '取消此任务';
+      row.append(copy, button(cancelLabel, 'stia-button--ghost', () => onCancel(attempt.attemptId), '×'));
+      pending.append(row);
+    }
+    return pending;
+  }
+
   function render() {
     const state = getState(tag.tagId) || {};
-    const attempt = state.attempts?.[0];
+    const attempts = state.attempts || [];
+    const activeAttempts = attempts.filter(item => ACTIVE_STATUSES.has(item.status));
+    const activeAttempt = activeAttempts[0];
     const available = (state.results || []).filter(result => result.status === 'available');
     const latest = available.find(result => result.resultId === state.tag?.latestResultId)
       || available.at(-1);
+    const resultAttempt = attempts.find(item => item.attemptId === latest?.attemptId);
+    const hasParallelWork = activeAttempts.length > 1
+      || activeAttempts.some(item => item.parallel)
+      || (resultAttempt?.parallel && activeAttempts.some(item => item.createdAt <= resultAttempt.createdAt));
+    const attempt = latest && (!activeAttempts.length || hasParallelWork)
+      ? (resultAttempt || attempts[0]) : (activeAttempt || attempts[0]);
     const actualPrompt = latest?.prompt
       || latest?.promptSnapshot
       || attempt?.promptSnapshot
@@ -135,8 +173,8 @@ export function createCard({
       portrait: '竖图',
       landscape: '横图',
     }[tag.ratio] || '';
-    const active = attempt && ACTIVE_STATUSES.has(attempt.status);
-    const mode = active ? 'active' : latest ? 'succeeded'
+    const active = activeAttempts.length > 0;
+    const mode = active && !(latest && hasParallelWork) ? 'active' : latest ? 'succeeded'
       : attempt && ['failed', 'interrupted', 'cancelled'].includes(attempt.status) ? 'failed' : 'idle';
     const imageSrc = mode === 'succeeded' ? api.fileUrl(latest.resultId) : '';
     currentView = { latest, attempt, actualPrompt, actualNegativePrompt, size, imageSrc };
@@ -147,7 +185,8 @@ export function createCard({
       : mode === 'succeeded'
         ? [mode, latest.resultId, imageSrc, actualPrompt, size, available.length, canAdjust]
         : [mode, attempt?.status, attempt?.model, attempt?.errorMessage, Boolean(attempt),
-          size, ratioLabel, actualPrompt, canAdjust, Boolean(state.tag?.resultIds?.length)]);
+          size, ratioLabel, actualPrompt, canAdjust, Boolean(state.tag?.resultIds?.length)])
+      + JSON.stringify(activeAttempts.map(item => [item.attemptId, item.status, item.statusMessage, item.model, item.presetNameSnapshot, item.parameters?.size]));
     if (signature === renderedSignature) return;
     const promptOpen = root.querySelector?.('.stia-prompt')?.open || false;
     const details = () => {
@@ -160,20 +199,20 @@ export function createCard({
     if (!latest) mediaCache = null;
     root.className = 'stia-card';
 
-    if (attempt && ACTIVE_STATUSES.has(attempt.status)) {
+    if (mode === 'active') {
       const body = document.createElement('div');
       body.className = 'stia-card__body';
-      const isAutoQueue = attempt.status === 'queued' && attempt.requestMode === 'auto';
+      const isAutoQueue = activeAttempt.status === 'queued' && activeAttempt.requestMode === 'auto';
       const isRegenerating = Boolean(latest) && !isAutoQueue;
       root.classList.add(isAutoQueue ? 'stia-card--queued' : 'stia-card--generating');
       body.append(statusHeading(
         isAutoQueue ? '◷' : '◌',
         isAutoQueue
           ? '自动排队中'
-          : (isRegenerating ? '正在重新生成…' : (STATUS_TEXT[attempt.status] || '处理中')),
+          : (isRegenerating ? '正在重新生成…' : (STATUS_TEXT[activeAttempt.status] || '处理中')),
         isAutoQueue
           ? '等待当前生成任务完成'
-          : (attempt.statusMessage || `${attempt.model || '当前模型'} · ${size || '默认尺寸'}`),
+          : (activeAttempts.length > 1 ? `${activeAttempts.length} 个生成任务并行，旧请求继续接图` : (activeAttempt.statusMessage || `${activeAttempt.model || '当前模型'} · ${size || '默认尺寸'}`)),
         isAutoQueue ? 'is-warning' : 'is-accent',
       ));
       if (!isAutoQueue) {
@@ -181,12 +220,7 @@ export function createCard({
         shimmer.className = 'stia-card__shimmer';
         body.append(shimmer);
       }
-      body.append(button(
-        isAutoQueue ? '取消排队' : '取消',
-        'stia-button--ghost stia-button--full',
-        () => onCancel(attempt.attemptId),
-        '×',
-      ));
+      body.append(pendingControls(activeAttempts));
       root.append(body);
       renderedBody = body;
       renderedSignature = signature;
@@ -234,7 +268,7 @@ export function createCard({
       const actions = document.createElement('div');
       actions.className = 'stia-actions stia-actions--fill';
       actions.append(
-        button('重新生成', '', () => onGenerate(tag, 'manual'), '↻'),
+        button(active ? '并行重 roll' : '重新生成', '', () => onGenerate(tag, 'manual'), '↻'),
         button('查看 / 保存', 'stia-button--square', openOriginal, '⌕'),
         button('画廊', 'stia-button--square', () => onOpenGallery(tag.tagId), '▦'),
       );
@@ -242,6 +276,7 @@ export function createCard({
         actions.append(button('调整后重绘', '', adjustRegenerate, '✎'));
       }
       body.append(completion, actions, details());
+      if (active) body.append(pendingControls(activeAttempts, { showRoll: false }));
       if (media.parentNode === root) {
         // 同一张图仍在原位置：仅替换文字与按钮，图片不摘下、不重写 src。
         renderedBody.replaceWith(body);

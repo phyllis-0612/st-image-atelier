@@ -47,6 +47,7 @@ function defaultSettings() {
     autoGenerate: false,
     enablePromptOverrideRegenerate: false,
     enableSmartRetry: false,
+    keepWaitingOnTimeout: true,
     galleryCleanupByAge: false,
     galleryMaxAgeDays: 7,
     galleryCleanupByCount: false,
@@ -81,7 +82,7 @@ function sanitizePreset(input, current = defaultPreset()) {
     output.responseFormat = ['b64_json', 'url', ''].includes(format) ? format : 'b64_json';
   }
   if ('defaultCount' in input) output.defaultCount = Math.min(4, Math.max(1, Number(input.defaultCount) || 1));
-  if ('timeoutMs' in input) output.timeoutMs = Math.min(600_000, Math.max(30_000, Number(input.timeoutMs) || 180_000));
+  if ('timeoutMs' in input) output.timeoutMs = Math.min(3_600_000, Math.max(30_000, Number(input.timeoutMs) || 180_000));
   if ('extraBody' in input) {
     if (!input.extraBody || typeof input.extraBody !== 'object' || Array.isArray(input.extraBody)) {
       throw new AppError('VALIDATION_FAILED', 'extraBody 必须是 JSON 对象');
@@ -145,6 +146,8 @@ class PresetService {
         ? { enablePromptOverrideRegenerate: patch.enablePromptOverrideRegenerate } : {}),
       ...(typeof patch.enableSmartRetry === 'boolean'
         ? { enableSmartRetry: patch.enableSmartRetry } : {}),
+      ...(typeof patch.keepWaitingOnTimeout === 'boolean'
+        ? { keepWaitingOnTimeout: patch.keepWaitingOnTimeout } : {}),
       ...(typeof patch.allowHttp === 'boolean' ? { allowHttp: patch.allowHttp } : {}),
       ...normalizeRetentionSettings({ ...current, ...patch }),
       updatedAt: now(),
