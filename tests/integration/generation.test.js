@@ -38,7 +38,7 @@ async function fixture(t) {
   });
   const metadata = await new MetadataStore(root).initialize();
   const storage = await new StorageService(root, () => preset.getSettings()).initialize();
-  const generation = new GenerationService({ preset, metadata, storage });
+  const generation = new GenerationService({ preset, metadata, storage, retryDelays: [0, 0, 0] });
   const gallery = new GalleryService({ metadata, storage });
   t.after(async () => {
     await upstream.close();
@@ -60,6 +60,21 @@ function request(prompt, overrides = {}) {
     parameters: { count: prompt === 'multi' ? 2 : 1 },
   };
 }
+
+test('服务端连续 5xx 最多重试三次，终止后重复提交同一任务不会重新请求', async t => {
+  const f = await fixture(t);
+  await f.preset.updateSettings({ enableSmartRetry: true });
+  const input = request('500');
+  await f.generation.generate(input);
+  const attempt = await waitForAttempt(f.metadata, input.attemptId);
+  assert.equal(attempt.status, 'failed');
+  assert.equal(attempt.retryCount, 3);
+  assert.equal(attempt.retryNotice.maxRetries, 3);
+  assert.equal(f.upstream.state.generationCalls, 4);
+  await f.generation.generate(input);
+  assert.equal(f.upstream.state.generationCalls, 4);
+  assert.equal(Object.values(f.metadata.index.attempts).length, 1);
+});
 
 test('URL 返回会立即下载并保存本地', async t => {
   const f = await fixture(t);

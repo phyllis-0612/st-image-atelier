@@ -1077,7 +1077,7 @@ export function createToolPanel({ api, store }) {
   const smartRetryField = field('生成失败后智能重试', enableSmartRetry);
   smartRetryField.classList.add('stia-switch-field', 'stia-switch-field--row');
   const smartRetryDescription = document.createElement('small');
-  smartRetryDescription.textContent = '仅在上游明确拒绝可选参数时自动回退一次；不会重试审核、限流、网络或 5xx 错误';
+  smartRetryDescription.textContent = '首次失败后最多自动重试 3 次（含参数兼容回退）；暂时性网络、超时、限流和 5xx 错误会间隔重试。达到上限即停止；取消、审核、密钥或余额错误不重试。生图失败会显示酒馆横幅提醒';
   smartRetryField.querySelector('span')?.append(smartRetryDescription);
   automationSection.append(autoField, promptOverrideField, smartRetryField);
 

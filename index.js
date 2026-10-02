@@ -11,6 +11,7 @@ import { createStCompat } from './src/ui/compat/st-api.js';
 import { createApiClient } from './src/ui/api/client.js';
 import { createStore } from './src/ui/state/store.js';
 import { createAutoQueue } from './src/ui/state/auto-queue.js';
+import { createGenerationNotifications } from './src/ui/state/generation-notifications.js';
 import { createMessageRenderer } from './src/ui/renderer/message-renderer.js';
 import { createMessageEvents } from './src/ui/events/message-events.js';
 import { createToolPanel } from './src/ui/pages/settings/settings.js';
@@ -55,9 +56,10 @@ function uuid() {
     || `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}-4000-8000-${Math.random().toString(16).slice(2).padEnd(12, '0').slice(0, 12)}`;
 }
 
-async function waitForAttempt(attemptId, tagId) {
+async function waitForAttempt(attemptId, tagId, onProgress) {
   for (;;) {
     const attempt = await api.attempt(attemptId);
+    onProgress?.(attempt);
     const current = store.state.tagStates.get(tagId) || { tagId, attempts: [], results: [] };
     store.setTag(tagId, { ...current, attempts: [attempt, ...(current.attempts || []).filter(item => item.attemptId !== attemptId)] });
     if (['succeeded', 'failed', 'interrupted', 'cancelled'].includes(attempt.status)) {
@@ -78,6 +80,7 @@ async function refreshTag(tagId) {
 async function generate(tag, mode, overrides = {}) {
   if (activeTags.has(tag.tagId)) return;
   activeTags.add(tag.tagId);
+  const notifications = createGenerationNotifications(compat.notify);
   const attemptId = mode === 'auto' ? `auto:${tag.tagId}` : uuid();
   const provider = store.state.settings.generationProvider || 'openai';
   const prompt = Object.hasOwn(overrides, 'prompt') ? String(overrides.prompt || '') : tag.prompt;
@@ -115,6 +118,7 @@ async function generate(tag, mode, overrides = {}) {
         count: tag.count,
       },
       onProgress: progressAttempt => {
+        notifications.progress(progressAttempt);
         const latest = store.state.tagStates.get(tag.tagId) || current;
         store.setTag(tag.tagId, {
           ...latest,
@@ -126,11 +130,17 @@ async function generate(tag, mode, overrides = {}) {
       },
     });
     if (['succeeded', 'failed', 'interrupted', 'cancelled'].includes(attempt.status)) {
+      if (attempt.status === 'failed' || attempt.status === 'interrupted') {
+        notifications.failed(attempt, attempt.retryCount);
+      }
       await refreshTag(tag.tagId);
       if (attempt.status === 'succeeded') void runGalleryCleanup();
       return attempt;
     }
-    const completed = await waitForAttempt(attempt.attemptId, tag.tagId);
+    const completed = await waitForAttempt(attempt.attemptId, tag.tagId, notifications.progress);
+    if (completed.status === 'failed' || completed.status === 'interrupted') {
+      notifications.failed(completed, completed.retryCount);
+    }
     if (completed.status === 'succeeded') void runGalleryCleanup();
     return completed;
   } catch (error) {
@@ -143,13 +153,16 @@ async function generate(tag, mode, overrides = {}) {
     optimisticAttempt.errorCode = error.code;
     optimisticAttempt.errorMessage = error.message;
     const latest = store.state.tagStates.get(tag.tagId) || current;
-    if (!(latest.attempts || []).some(item => item.attemptId === attemptId)) {
+    notifications.failed(error, error.autoRetryCount ?? latest.attempts?.[0]?.retryCount);
+    const persisted = latest.attempts?.find(item => item.attemptId === attemptId);
+    if (!persisted || ['queued', 'generating', 'downloading', 'saving'].includes(persisted.status)) {
       store.setTag(tag.tagId, {
         ...latest,
-        attempts: [optimisticAttempt, ...(latest.attempts || [])],
+        attempts: [optimisticAttempt, ...(latest.attempts || []).filter(item => item.attemptId !== attemptId)],
       });
     }
-    throw error;
+    console.warn('[画笺] 生图失败', error);
+    return store.state.tagStates.get(tag.tagId)?.attempts?.find(item => item.attemptId === attemptId) || optimisticAttempt;
   } finally {
     activeTags.delete(tag.tagId);
   }

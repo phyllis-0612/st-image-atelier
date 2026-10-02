@@ -1,3 +1,5 @@
+import { runGenerationWithRetry } from '../../shared/generation-retry.js';
+
 const ERROR_MESSAGES = {
   PRESET_NOT_CONFIGURED: 'API 预设未配置',
   API_KEY_MISSING: '缺少 API 密钥',
@@ -228,6 +230,8 @@ export async function generateImages({
   settings,
   signal,
   onCompatibilityRetry,
+  onRetry,
+  retryDelays,
 }) {
   if (!preset.baseUrl) throw new DirectError('PRESET_NOT_CONFIGURED');
   if (!apiKey) throw new DirectError('API_KEY_MISSING');
@@ -255,25 +259,27 @@ export async function generateImages({
     body: JSON.stringify(payloadBody),
     signal,
   }, preset.timeoutMs);
-  let payload;
+  let compatibilityRetry;
   try {
-    payload = await request(body);
+    const payload = await runGenerationWithRetry({
+      request: () => request(body),
+      enabled: settings?.enableSmartRetry === true,
+      signal, onRetry, retryDelays,
+      recover: async error => {
+        if (compatibilityRetry) return null;
+        const retry = detectCompatibilityRetry(error, body);
+        if (!retry) return null;
+        compatibilityRetry = retry;
+        for (const parameter of retry.adjustedParameters) delete body[parameter];
+        await onCompatibilityRetry?.(retry);
+        return retry;
+      },
+    });
+    return parseImageResponse(payload);
   } catch (error) {
-    const retry = settings?.enableSmartRetry ? detectCompatibilityRetry(error, body) : null;
-    if (!retry || signal?.aborted) throw error;
-    const fallbackBody = { ...body };
-    for (const parameter of retry.adjustedParameters) delete fallbackBody[parameter];
-    console.info('[画笺] 智能兼容重试', retry.reason);
-    await onCompatibilityRetry?.(retry);
-    if (signal?.aborted) throw signal.reason || new DirectError('UPSTREAM_TIMEOUT', '请求已取消');
-    try {
-      payload = await request(fallbackBody);
-    } catch (retryError) {
-      retryError.compatibilityRetry = retry;
-      throw retryError;
-    }
+    if (compatibilityRetry) error.compatibilityRetry = compatibilityRetry;
+    throw error;
   }
-  return parseImageResponse(payload);
 }
 
 export const RESPONSE_FORMATS = Object.freeze(['b64_json', 'url', '']);

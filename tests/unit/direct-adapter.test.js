@@ -244,14 +244,13 @@ test('智能重试只移除错误明确点名的 size、quality 或 n', async t 
   }
 });
 
-test('审核、鉴权、限流、网络、5xx 和未知错误禁止智能重试', async t => {
+test('审核、鉴权、余额和未知业务错误禁止智能重试', async t => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
   const cases = [
     [401, 'invalid api key'],
     [403, 'permission denied'],
-    [429, 'rate limited'],
-    [500, 'internal error: unsupported quality'],
+    [500, 'insufficient quota'],
     [400, 'Content was rejected by upstream moderation: unsupported quality'],
     [400, 'some unknown business error'],
   ];
@@ -275,8 +274,9 @@ test('审核、鉴权、限流、网络、5xx 和未知错误禁止智能重试'
   };
   await assert.rejects(generateImages({
     preset: presetFor(), apiKey: 'sk', prompt: 'x', parameters: {}, settings: { enableSmartRetry: true },
+    retryDelays: [0, 0, 0],
   }));
-  assert.equal(networkCalls, 1);
+  assert.equal(networkCalls, 4);
 });
 
 test('兼容重试第二次仍失败时停止，并附带已尝试修正记录', async t => {

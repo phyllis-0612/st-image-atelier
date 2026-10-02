@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { createDirectApiClient } from '../../src/ui/api/direct-client.js';
 import { createMemoryGalleryMetadataStore } from '../../src/ui/api/gallery-metadata-store.js';
 import { PNG_BASE64, startMockUpstream } from '../mocks/mock-upstream.js';
+import { createGenerationNotifications } from '../../src/ui/state/generation-notifications.js';
 
 function response(status, payload) {
   return new Response(JSON.stringify(payload), {
@@ -11,6 +12,48 @@ function response(status, payload) {
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+test('直连完整任务失败时及时通知三轮重试，保存失败状态且幂等重入不重新生成', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return response(502, { error: { message: 'Upstream service temporarily unavailable' } });
+  };
+  const tagId = crypto.randomUUID();
+  const tag = { tagId, prompt: 'original', ordinal: 0, attempts: [], resultIds: [] };
+  const message = { mes: '<draw>original</draw>', extra: { stImageAtelier: { tags: [tag] } } };
+  const keys = new Map();
+  const client = createDirectApiClient({
+    compat: { chat: () => [message], save: async () => {}, headers: () => ({}) },
+    extensionSettings: {}, saveSettingsDebounced: () => {},
+    galleryStore: createMemoryGalleryMetadataStore(), retryDelays: [0, 0, 0],
+    keyStorage: { getItem: key => keys.get(key), setItem: (key, value) => keys.set(key, value) },
+  });
+  await client.updateSettings({ enableSmartRetry: true });
+  await client.updatePreset({ baseUrl: 'https://example.com', apiKey: 'test', selectedModel: 'image' });
+  const banners = [];
+  const notifications = createGenerationNotifications((...args) => banners.push(args));
+  const input = { tagId, attemptId: `auto:${tagId}`, requestMode: 'auto', prompt: 'original', parameters: {},
+    onProgress: attempt => {
+      assert.equal(attempt.status, 'generating');
+      assert.ok(calls < 4, '错误横幅在任务结束前就能显示');
+      notifications.progress(attempt);
+    },
+  };
+  await assert.rejects(client.generate(input), error => error.autoRetryCount === 3);
+  const [state] = await client.resolveTags([tagId]);
+  assert.equal(state.attempts.length, 1);
+  assert.equal(state.attempts[0].status, 'failed');
+  assert.equal(state.attempts[0].retryCount, 3);
+  assert.equal(calls, 4);
+  notifications.failed(state.attempts[0], state.attempts[0].retryCount);
+  assert.deepEqual(banners.map(value => value[0]), ['warning', 'warning', 'warning', 'error']);
+  const duplicate = await client.generate(input);
+  assert.equal(duplicate.status, 'failed');
+  assert.equal(calls, 4);
+});
 
 function storedZip(name, data) {
   const nameBytes = Buffer.from(name);

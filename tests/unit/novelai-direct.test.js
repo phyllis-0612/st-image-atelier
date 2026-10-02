@@ -11,6 +11,28 @@ import {
 } from '../../src/ui/api/novelai-direct.js';
 import { PNG_BASE64 } from '../mocks/mock-upstream.js';
 
+test('NovelAI 暂时失败后自动重试，成功即停止且保持提示词与随机种子', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const bodies = [];
+  globalThis.fetch = async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return new Response(JSON.stringify(bodies.length < 3
+      ? { error: { message: 'temporarily unavailable' } }
+      : { images: [PNG_BASE64] }), { status: bodies.length < 3 ? 502 : 200,
+      headers: { 'Content-Type': 'application/json' } });
+  };
+  const result = await generateNovelAiImages({
+    config: { baseUrl: 'https://example.com', model: 'nai-diffusion-4-5-full', defaultSize: '832x1216', seed: -1 },
+    apiKey: 'test', prompt: 'original', artistPrompt: 'artist', parameters: {},
+    settings: { enableSmartRetry: true }, retryDelays: [0, 0, 0],
+  });
+  assert.equal(result.sources.length, 1);
+  assert.equal(bodies.length, 3);
+  assert.deepEqual(bodies[1], bodies[0]);
+  assert.deepEqual(bodies[2], bodies[0]);
+});
+
 function storedZip(name, data, method = 0) {
   const nameBytes = Buffer.from(name);
   const body = Buffer.from(data);

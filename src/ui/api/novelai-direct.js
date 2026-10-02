@@ -1,3 +1,4 @@
+import { runGenerationWithRetry } from '../../shared/generation-retry.js';
 import {
   DirectError,
   bytesToBase64,
@@ -510,6 +511,8 @@ export async function generateNovelAiImages({
   parameters,
   settings,
   signal,
+  onRetry,
+  retryDelays,
 }) {
   if (!config?.baseUrl) throw new DirectError('PRESET_NOT_CONFIGURED', 'NAI 中转站 / 站点未配置');
   if (!apiKey) throw new DirectError('API_KEY_MISSING', '缺少 NAI 中转站 Key / Token');
@@ -526,15 +529,19 @@ export async function generateNovelAiImages({
     size: parameters.size || config.defaultSize,
     count: parameters.count || config.defaultCount,
   });
-  const sources = await fetchNovelAi(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(built.body),
-    signal,
-  }, config.timeoutMs || 180_000, settings.maxImageBytes || 30 * 1024 * 1024);
+  const sources = await runGenerationWithRetry({
+    enabled: settings?.enableSmartRetry === true,
+    signal, onRetry, retryDelays,
+    request: () => fetchNovelAi(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(built.body),
+      signal,
+    }, config.timeoutMs || 180_000, settings.maxImageBytes || 30 * 1024 * 1024),
+  });
   return {
     sources,
     resolvedPrompt: built.resolvedPrompt,

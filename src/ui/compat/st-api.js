@@ -72,5 +72,17 @@ export function createStCompat(dependencies) {
     event,
     on,
     messageElement,
+    notify(level, message, title = '画笺') {
+      const toast = dependencies.toastr || globalThis.toastr;
+      try {
+        toast?.[level]?.(message, title, {
+          escapeHtml: true,
+          closeButton: true,
+          timeOut: 7000,
+        });
+      } catch (error) {
+        console.warn('[画笺] 无法显示酒馆通知', error);
+      }
+    },
   };
 }

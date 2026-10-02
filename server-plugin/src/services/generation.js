@@ -8,10 +8,11 @@ const { assertUuidLike, validatePrompt } = require('../utils/validation');
 function timestamp() { return new Date().toISOString(); }
 
 class GenerationService {
-  constructor({ metadata, preset, storage }) {
+  constructor({ metadata, preset, storage, retryDelays }) {
     this.metadata = metadata;
     this.preset = preset;
     this.storage = storage;
+    this.retryDelays = retryDelays;
     this.running = new Map();
     this.creationLocks = new Map();
   }
@@ -118,6 +119,13 @@ class GenerationService {
         prompt,
         parameters,
         signal: controller.signal,
+        retryDelays: this.retryDelays,
+        onRetry: async retry => {
+          attempt.retryCount = retry.retryCount;
+          attempt.retryNotice = retry;
+          attempt.statusMessage = retry.message;
+          await this.metadata.putAttempt(attempt);
+        },
         onCompatibilityRetry: async retry => {
           attempt.compatibilityRetry = retry;
           attempt.statusMessage = retry.message;

@@ -197,6 +197,7 @@ export function createDirectApiClient({
   saveSettingsDebounced,
   keyStorage = globalThis.localStorage,
   galleryStore,
+  retryDelays,
 }) {
   const { namespace, legacyGallery } = ensureNamespace(extensionSettings);
   const metadataStore = galleryStore || createSillyTavernGalleryMetadataStore(compat);
@@ -569,6 +570,13 @@ export function createDirectApiClient({
     const saved = [];
     try {
       let sources;
+      const onRetry = async retry => {
+        attempt.retryCount = retry.retryCount;
+        attempt.retryNotice = retry;
+        attempt.statusMessage = retry.message;
+        found = await persistAttempt(found, attempt);
+        input.onProgress?.(clone(attempt));
+      };
       if (provider === 'novelai') {
         const generated = await generateNovelAiImages({
           config: { ...novelAi, negativePrompt: attempt.negativePromptSnapshot },
@@ -579,6 +587,8 @@ export function createDirectApiClient({
           parameters: attempt.parameters,
           settings: namespace.settings,
           signal: controller.signal,
+          onRetry,
+          retryDelays,
         });
         sources = generated.sources;
         attempt.resolvedPrompt = generated.resolvedPrompt;
@@ -592,6 +602,8 @@ export function createDirectApiClient({
           parameters: attempt.parameters,
           settings: namespace.settings,
           signal: controller.signal,
+          onRetry,
+          retryDelays,
           onCompatibilityRetry: async retry => {
             attempt.compatibilityRetry = retry;
             attempt.statusMessage = retry.message;

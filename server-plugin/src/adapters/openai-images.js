@@ -1,4 +1,5 @@
 'use strict';
+const { runGenerationWithRetry } = require('../utils/generation-retry');
 
 const { AppError } = require('../utils/errors');
 
@@ -152,7 +153,7 @@ function detectCompatibilityRetry(error, body = {}) {
   };
 }
 
-async function generate({ preset, apiKey, prompt, parameters, settings, signal, onCompatibilityRetry }) {
+async function generate({ preset, apiKey, prompt, parameters, settings, signal, onCompatibilityRetry, onRetry, retryDelays }) {
   if (!preset.baseUrl) throw new AppError('PRESET_NOT_CONFIGURED');
   if (!apiKey) throw new AppError('API_KEY_MISSING');
   if (!preset.selectedModel) throw new AppError('MODEL_NOT_SELECTED');
@@ -175,25 +176,27 @@ async function generate({ preset, apiKey, prompt, parameters, settings, signal, 
     body: JSON.stringify(payloadBody),
     signal,
   }, preset.timeoutMs);
-  let payload;
+  let compatibilityRetry;
   try {
-    payload = await request(body);
+    const payload = await runGenerationWithRetry({
+      request: () => request(body),
+      enabled: settings?.enableSmartRetry === true,
+      signal, onRetry, retryDelays,
+      recover: async error => {
+        if (compatibilityRetry) return null;
+        const retry = detectCompatibilityRetry(error, body);
+        if (!retry) return null;
+        compatibilityRetry = retry;
+        for (const parameter of retry.adjustedParameters) delete body[parameter];
+        await onCompatibilityRetry?.(retry);
+        return retry;
+      },
+    });
+    return parseImageResponse(payload);
   } catch (error) {
-    const retry = settings?.enableSmartRetry ? detectCompatibilityRetry(error, body) : null;
-    if (!retry || signal?.aborted) throw error;
-    const fallbackBody = { ...body };
-    for (const parameter of retry.adjustedParameters) delete fallbackBody[parameter];
-    console.info('[画笺] 智能兼容重试', retry.reason);
-    await onCompatibilityRetry?.(retry);
-    if (signal?.aborted) throw signal.reason || new AppError('ATTEMPT_INTERRUPTED', '用户已取消');
-    try {
-      payload = await request(fallbackBody);
-    } catch (retryError) {
-      retryError.compatibilityRetry = retry;
-      throw retryError;
-    }
+    if (compatibilityRetry) error.compatibilityRetry = compatibilityRetry;
+    throw error;
   }
-  return parseImageResponse(payload);
 }
 
 async function listModels({ preset, apiKey, settings, signal }) {
