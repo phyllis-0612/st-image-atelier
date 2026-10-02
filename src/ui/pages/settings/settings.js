@@ -173,6 +173,7 @@ export function createToolPanel({ api, store }) {
     ['low', 'low'],
     ['medium', 'medium'],
     ['high', 'high'],
+    ['xhigh', 'xhigh'],
     ['max', 'max'],
     ['standard', 'standard'],
     ['hd', 'hd'],
