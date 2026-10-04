@@ -454,6 +454,7 @@ export function createDirectApiClient({
       artistNegativePromptSnapshot: attempt.artistNegativePromptSnapshot || '',
       generationSeed: attempt.generationSeed ?? null,
       apiModel: attempt.model,
+      parameters: { size: attempt.parameters?.size ?? null, quality: attempt.parameters?.quality ?? null },
       localRelativePath: uploaded.path,
       mimeType: type.mimeType,
       byteSize: bytes.byteLength,
@@ -629,6 +630,7 @@ export function createDirectApiClient({
             found = await persistAttempt(found, attempt);
             input.onProgress?.(clone(attempt));
           },
+          onRequestParameters: parameters => Object.assign(attempt.parameters, parameters),
         });
       }
 

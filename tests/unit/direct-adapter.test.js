@@ -220,6 +220,7 @@ test('智能重试只移除错误明确点名的 size、quality 或 n', async t 
     ['n', "parameter 'n' is not allowed"],
   ]) {
     const bodies = [];
+    const snapshots = [];
     globalThis.fetch = async (_url, options) => {
       const body = JSON.parse(options.body);
       bodies.push(body);
@@ -235,8 +236,10 @@ test('智能重试只移除错误明确点名的 size、quality 或 n', async t 
       prompt: 'x',
       parameters: {},
       settings: { enableSmartRetry: true },
+      onRequestParameters: value => snapshots.push({ ...value }),
     });
     assert.equal(bodies.length, 2, parameter);
+    assert.deepEqual(snapshots.at(-1), { size: bodies[1].size ?? null, quality: bodies[1].quality ?? null });
     assert.equal(parameter in bodies[1], false, parameter);
     for (const kept of Object.keys(extraBody).filter(name => name !== parameter)) {
       assert.equal(bodies[1][kept], extraBody[kept], `${parameter} 报错时保留 ${kept}`);

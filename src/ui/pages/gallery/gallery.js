@@ -1,4 +1,5 @@
 import { makeImageSaveable, openImageViewer } from '../../media/image-viewer.js';
+import { imageMetadata } from '../../media/image-metadata.js';
 import { filterGalleryItems, galleryFilterOptions, normalizeGalleryItem } from './gallery-query.js';
 
 const PAGE_SIZE = 30;
@@ -251,12 +252,22 @@ export function createGalleryPage(api) {
     caption.setAttribute('aria-label', '查看这张原图');
     const model = document.createElement('strong');
     model.textContent = result.apiModel || '未知模型';
-    const prompt = document.createElement('span');
-    prompt.textContent = promptOf(result);
+    const metadata = imageMetadata(result);
+    const info = document.createElement('span');
+    info.className = 'stia-gallery-card__metadata';
+    const preset = document.createElement('span');
+    preset.className = 'stia-gallery-card__preset';
+    preset.textContent = metadata.presetName;
+    preset.title = `API 预设：${metadata.presetName}`;
+    const quality = document.createElement('span');
+    quality.className = 'stia-gallery-card__quality';
+    quality.textContent = `画质 ${metadata.quality}`;
+    quality.title = `画质：${metadata.quality}`;
+    info.append(preset, quality);
     const time = document.createElement('time');
     time.dateTime = result.createdAt;
     time.textContent = formatDate(result.createdAt);
-    caption.append(model, prompt, time);
+    caption.append(model, info, time);
     caption.addEventListener('click', () => {
       if (!batchMode) return detail(result);
       toggleSelection(result.resultId);

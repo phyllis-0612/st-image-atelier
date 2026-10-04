@@ -449,3 +449,20 @@ test('服务端画廊按时间和数量规则自动清理最旧图片', async t 
     assert.equal(f.metadata.getTag(item.input.tagId).autoSuppressed, true);
   }
 });
+
+test('服务端图片也保存最终请求的质量与尺寸，不套用当前预设', async t => {
+  const f = await fixture(t);
+  await f.preset.update({ defaultQuality: 'xhigh', extraBody: { size: '512X768' } });
+  const input = request('snapshot');
+  await f.generation.generate(input);
+  const first = await waitForAttempt(f.metadata, input.attemptId);
+  assert.equal(first.status, 'succeeded');
+  assert.deepEqual(f.metadata.getResult(first.resultIds[0]).parameters, { quality: 'xhigh', size: '512x768' });
+  await f.preset.update({ sendQuality: false });
+  const skipped = request('omitted');
+  await f.generation.generate(skipped);
+  const second = await waitForAttempt(f.metadata, skipped.attemptId);
+  assert.equal(second.status, 'succeeded');
+  assert.equal(f.metadata.getResult(second.resultIds[0]).parameters.quality, null);
+  assert.equal(f.metadata.getResult(first.resultIds[0]).parameters.quality, 'xhigh');
+});

@@ -783,25 +783,70 @@
   outline-offset: -3px;
 }
 
-.stia-card__size {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  padding: 3px 8px;
-  color: white;
-  background: rgb(0 0 0 / 52%);
-  border-radius: 6px;
-  font-size: 11px;
-  backdrop-filter: blur(8px);
-}
-
 .stia-card__completion {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px 12px;
   font-size: 12px;
 }
+
+.stia-card__history {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.stia-card__size {
+  padding-left: 8px;
+  color: var(--stia-secondary);
+  border-left: 1px solid var(--stia-border-subtle);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stia-card--succeeded .stia-card__body {
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.stia-card__metadata {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--stia-border-subtle);
+}
+
+.stia-card__meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--stia-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.stia-card__meta small {
+  flex-shrink: 0;
+  color: var(--stia-muted);
+  font-size: 10px;
+}
+
+.stia-card__meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stia-card__meta--preset { flex: 1 1 110px; }
+.stia-card__meta--quality { flex: 0 1 auto; max-width: 100%; }
+.stia-card__meta--model { flex: 1 1 220px; }
 
 .stia-success {
   color: var(--stia-success);
@@ -997,6 +1042,8 @@
 }
 
 .stia-gallery-card__caption {
+  box-sizing: border-box;
+  min-width: 0;
   display: grid;
   gap: 3px;
   width: 100%;
@@ -1015,12 +1062,44 @@
   font-weight: 500;
 }
 
-.stia-gallery-card__caption > span {
+.stia-gallery-card__caption > .stia-gallery-card__metadata {
   overflow: hidden;
   color: var(--stia-secondary);
   text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 11px;
+}
+
+.stia-gallery-card__metadata {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+  min-width: 0;
+}
+
+.stia-gallery-card__preset {
+  flex: 1 1 60px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stia-gallery-card__quality {
+  flex: 0 1 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--stia-accent-text);
+  font-size: 10px;
+}
+
+.stia-gallery-card__caption > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stia-gallery-card time {

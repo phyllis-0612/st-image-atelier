@@ -1,4 +1,5 @@
 import { makeImageSaveable, openImageViewer } from '../media/image-viewer.js';
+import { imageMetadata } from '../media/image-metadata.js';
 
 import { ACTIVE_STATUSES } from '../state/generation-state.js';
 
@@ -86,13 +87,13 @@ export function createCard({
 
   // 图片只绑定一次事件；复用后读取最新快照，避免回调仍指向旧提示词或旧结果。
   function openOriginal() {
-    const { latest, actualPrompt, size, attempt, imageSrc } = currentView;
+    const { latest, actualPrompt, metadata, imageSrc } = currentView;
     return openImageViewer({
       src: imageSrc,
       alt: actualPrompt.slice(0, 120),
       filename: latest.resultId,
       prompt: actualPrompt,
-      meta: [attempt?.model, size].filter(Boolean).join(' · '),
+      meta: [metadata.presetName, `画质 ${metadata.quality}`, metadata.model, metadata.size].filter(Boolean).join(' · '),
     });
   }
 
@@ -167,7 +168,12 @@ export function createCard({
       || '';
     const canAdjust = getSettings()?.enablePromptOverrideRegenerate === true
       && typeof onAdjustRegenerate === 'function';
-    const size = displaySize(attempt?.parameters?.size || '');
+    const metadataAttempt = latest
+      ? (resultAttempt || (!latest.attemptId ? attempts.find(item => item.status === 'succeeded') : undefined))
+      : attempt;
+    const metadata = imageMetadata(latest, metadataAttempt);
+    const size = latest && (!activeAttempts.length || hasParallelWork)
+      ? metadata.size : displaySize(attempt?.parameters?.size || '');
     const ratioLabel = {
       square: '方形',
       portrait: '竖图',
@@ -177,13 +183,13 @@ export function createCard({
     const mode = active && !(latest && hasParallelWork) ? 'active' : latest ? 'succeeded'
       : attempt && ['failed', 'interrupted', 'cancelled'].includes(attempt.status) ? 'failed' : 'idle';
     const imageSrc = mode === 'succeeded' ? api.fileUrl(latest.resultId) : '';
-    currentView = { latest, attempt, actualPrompt, actualNegativePrompt, size, imageSrc };
+    currentView = { latest, attempt, actualPrompt, actualNegativePrompt, size, imageSrc, metadata };
     // 只比较实际画面需要的数据，不受其他卡片、更新时间、收藏或无关设置影响。
     const signature = JSON.stringify(mode === 'active'
       ? [mode, attempt.attemptId, attempt.status, attempt.requestMode, attempt.statusMessage,
         attempt.model, size, Boolean(latest)]
       : mode === 'succeeded'
-        ? [mode, latest.resultId, imageSrc, actualPrompt, size, available.length, canAdjust]
+        ? [mode, latest.resultId, imageSrc, actualPrompt, size, available.length, canAdjust, metadata]
         : [mode, attempt?.status, attempt?.model, attempt?.errorMessage, Boolean(attempt),
           size, ratioLabel, actualPrompt, canAdjust, Boolean(state.tag?.resultIds?.length)])
       + JSON.stringify(activeAttempts.map(item => [item.attemptId, item.status, item.statusMessage, item.model, item.presetNameSnapshot, item.parameters?.size]));
@@ -238,22 +244,11 @@ export function createCard({
         image.loading = 'lazy';
         makeImageSaveable(image, openOriginal);
         media.append(image);
-        mediaCache = { resultId: latest.resultId, src: imageSrc, media, image, badge: null };
+        mediaCache = { resultId: latest.resultId, src: imageSrc, media, image };
       }
       const { media, image } = mediaCache;
       const alt = actualPrompt.slice(0, 120);
       if (image.alt !== alt) image.alt = alt;
-      if (size) {
-        if (!mediaCache.badge) {
-          mediaCache.badge = document.createElement('span');
-          mediaCache.badge.className = 'stia-card__size';
-          media.append(mediaCache.badge);
-        }
-        if (mediaCache.badge.textContent !== size) mediaCache.badge.textContent = size;
-      } else if (mediaCache.badge) {
-        mediaCache.badge.remove();
-        mediaCache.badge = null;
-      }
       const body = document.createElement('div');
       body.className = 'stia-card__body';
       const completion = document.createElement('div');
@@ -264,7 +259,34 @@ export function createCard({
       const history = document.createElement('span');
       history.className = 'stia-muted';
       history.textContent = `历史 ${available.length} 张`;
-      completion.append(done, history);
+      const historyInfo = document.createElement('span');
+      historyInfo.className = 'stia-card__history';
+      historyInfo.append(history);
+      if (metadata.size) {
+        const dimensions = document.createElement('span');
+        dimensions.className = 'stia-card__size';
+        dimensions.textContent = metadata.size;
+        dimensions.title = `尺寸：${metadata.size}`;
+        historyInfo.append(dimensions);
+      }
+      completion.append(done, historyInfo);
+      const info = document.createElement('div');
+      info.className = 'stia-card__metadata';
+      for (const [kind, label, value] of [
+        ['preset', '预设', metadata.presetName],
+        ['quality', '画质', metadata.quality],
+        ['model', '模型', metadata.model],
+      ]) {
+        const item = document.createElement('span');
+        item.className = `stia-card__meta stia-card__meta--${kind}`;
+        item.title = `${label}：${value}`;
+        const key = document.createElement('small');
+        key.textContent = label;
+        const text = document.createElement('span');
+        text.textContent = value;
+        item.append(key, text);
+        info.append(item);
+      }
       const actions = document.createElement('div');
       actions.className = 'stia-actions stia-actions--fill';
       actions.append(
@@ -275,7 +297,7 @@ export function createCard({
       if (canAdjust) {
         actions.append(button('调整后重绘', '', adjustRegenerate, '✎'));
       }
-      body.append(completion, actions, details());
+      body.append(completion, info, actions, details());
       if (active) body.append(pendingControls(activeAttempts, { showRoll: false }));
       if (media.parentNode === root) {
         // 同一张图仍在原位置：仅替换文字与按钮，图片不摘下、不重写 src。

@@ -943,3 +943,28 @@ test('已迁移版本不会从旧聊天副本复活已删除的画廊记录', as
   assert.deepEqual(tag.resultIds, []);
   assert.equal((await client.galleryMetadata()).total, 0);
 });
+
+for (const [name, patch, parameters, expected] of [
+  ['default', { defaultQuality: 'xhigh' }, {}, 'xhigh'],
+  ['tag override', { defaultQuality: 'high' }, { quality: 'max' }, 'max'],
+  ['omitted', { defaultQuality: 'high', sendQuality: false }, { quality: 'max' }, null],
+  ['extra body', { defaultQuality: 'high', extraBody: { quality: 'hd' } }, {}, 'hd'],
+]) {
+  test(`新图片保存实际画质快照：${name}`, async t => {
+    const f = await concurrentFixture(t);
+    await f.client.updatePreset(patch);
+    f.tag.quality = parameters.quality;
+    const work = f.runner.generate(f.tag, 'manual');
+    await waitUntil(() => f.requests.length === 1);
+    assert.equal(f.requests[0].body.quality ?? null, expected);
+    f.requests[0].finish();
+    const attempt = await work;
+    const [state] = await f.client.resolveTags([f.tag.tagId]);
+    assert.equal(attempt.parameters.quality, expected);
+    assert.equal(state.results[0].parameters.quality, expected);
+    const gallery = await f.client.galleryMetadata();
+    assert.equal(gallery.items[0].parameters.quality, expected);
+    await f.client.updatePreset({ defaultQuality: 'low' });
+    assert.equal((await f.client.galleryMetadata()).items[0].parameters.quality, expected);
+  });
+}

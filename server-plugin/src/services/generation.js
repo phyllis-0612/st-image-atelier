@@ -124,6 +124,7 @@ class GenerationService {
         parameters,
         signal: controller.signal,
         retryDelays: this.retryDelays,
+        onRequestParameters: values => Object.assign(attempt.parameters, values),
         onTimeout: async timeoutMs => {
           if (attempt.status !== 'generating' || controller.signal.aborted) return;
           attempt.statusMessage = generationWaitMessage(timeoutMs);
@@ -163,6 +164,7 @@ class GenerationService {
           presetId: 'default',
           presetNameSnapshot: preset.name,
           apiModel: preset.selectedModel,
+          parameters: { size: attempt.parameters?.size ?? null, quality: attempt.parameters?.quality ?? null },
           ...saved,
           sourceType: source.sourceType,
           status: 'available',

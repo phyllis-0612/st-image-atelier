@@ -20,6 +20,7 @@ function item(overrides = {}) {
     presetId: 'main',
     presetNameSnapshot: '主站 API',
     provider: 'openai',
+    parameters: { size: '1024x1024', quality: 'max' },
     favorite: false,
     ...overrides,
   };
@@ -116,6 +117,13 @@ test('批量收藏、取消收藏和删除只作用于当前筛选后选中的�
   const page = createGalleryPage(api);
   document.body.append(page.root);
   await page.load();
+  const caption = page.root.querySelector('[data-result-id="cat-1"] .stia-gallery-card__caption');
+  assert.match(caption.textContent, /主站 API/);
+  assert.match(caption.textContent, /画质 max/);
+  assert.equal(caption.textContent.includes('cat one'), false);
+  caption.click();
+  assert.equal(document.querySelector('.stia-image-viewer__prompt pre').textContent, 'cat one');
+  document.querySelector('.stia-image-viewer__close').click();
 
   const buttons = () => [...page.root.querySelectorAll('button')];
   const click = label => buttons().find(value => value.textContent === label).click();

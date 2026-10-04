@@ -238,7 +238,7 @@ test('同一图片元数据更新后，查看原图与调整后重绘使用最�
   dom.window.document.querySelector('.stia-image-viewer__close').click();
 });
 
-test('仅负面词和 provider 快照更新时，跳过重绘也不会使按钮回调过期', t => {
+test('负面词不触发重绘，provider 改变画质说明时只更新信息区且回调不过期', t => {
   const { dom, container, state, store, adjusted } = setup(t);
   store.set({ settings: { ...store.state.settings, enablePromptOverrideRegenerate: true } });
   const card = container.querySelector('.stia-card');
@@ -246,9 +246,15 @@ test('仅负面词和 provider 快照更新时，跳过重绘也不会使按钮�
   observer.observe(card, { childList: true, attributes: true, characterData: true, subtree: true });
   const updated = JSON.parse(JSON.stringify(state));
   updated.results[0].negativePrompt = 'latest negative';
-  updated.results[0].provider = 'novelai';
   store.setTag('tag-1', updated);
   assert.deepEqual(observer.takeRecords(), []);
+  const image = card.querySelector('img');
+  updated.results[0].provider = 'novelai';
+  store.setTag('tag-1', updated);
+  assert.match(card.querySelector('.stia-card__meta--quality').textContent, /不适用/);
+  assert.equal(card.querySelector('img'), image);
+  const records = observer.takeRecords();
+  assert.equal(records.some(record => record.target === image || [...record.removedNodes].includes(image)), false);
   [...card.querySelectorAll('button')].find(button => button.textContent.includes('调整后重绘')).click();
   assert.equal(adjusted[0][1].negativePrompt, 'latest negative');
   assert.equal(adjusted[0][1].provider, 'novelai');
@@ -287,4 +293,26 @@ test('移除卡片时清掉已脱离 DOM 的缓存，删除结果后也不再显
   state.tag.latestResultId = null;
   store.setTag('tag-1', state);
   assert.equal(container.querySelector('img'), null);
+});
+
+test('图片元数据来自回图快照，尺寸在历史旁边，信息更新不摘下图片', t => {
+  const { container, state, store } = setup(t);
+  const card = container.querySelector('.stia-card');
+  const image = card.querySelector('img');
+  state.results[0] = { ...state.results[0], attemptId: 'pruned-attempt',
+    presetNameSnapshot: '备用 API', apiModel: 'gpt-image-2.5-sunburst',
+    parameters: { size: '1536x1024', quality: 'xhigh' } };
+  store.setTag('tag-1', state);
+  assert.equal(card.querySelector('.stia-card__media .stia-card__size'), null);
+  assert.equal(card.querySelector('.stia-card__history .stia-card__size').textContent, '1536×1024');
+  assert.match(card.querySelector('.stia-card__metadata').textContent, /备用 API/);
+  assert.match(card.querySelector('.stia-card__metadata').textContent, /xhigh/);
+  assert.match(card.querySelector('.stia-card__metadata').textContent, /gpt-image-2.5-sunburst/);
+  const updated = structuredClone(state);
+  updated.results[0].presetNameSnapshot = '原预设快照';
+  updated.results[0].parameters.quality = null;
+  store.setTag('tag-1', updated);
+  assert.equal(card.querySelector('img'), image);
+  assert.match(card.querySelector('.stia-card__metadata').textContent, /原预设快照/);
+  assert.match(card.querySelector('.stia-card__meta--quality').textContent, /未发送/);
 });

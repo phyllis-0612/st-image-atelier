@@ -155,7 +155,7 @@ function detectCompatibilityRetry(error, body = {}) {
   };
 }
 
-async function generate({ preset, apiKey, prompt, parameters, settings, signal, onCompatibilityRetry, onRetry, retryDelays, onTimeout }) {
+async function generate({ preset, apiKey, prompt, parameters, settings, signal, onCompatibilityRetry, onRetry, retryDelays, onTimeout, onRequestParameters }) {
   if (!preset.baseUrl) throw new AppError('PRESET_NOT_CONFIGURED');
   if (!apiKey) throw new AppError('API_KEY_MISSING');
   if (!preset.selectedModel) throw new AppError('MODEL_NOT_SELECTED');
@@ -172,12 +172,15 @@ async function generate({ preset, apiKey, prompt, parameters, settings, signal, 
   body.prompt = prompt;
   if ('size' in body) body.size = normalizeImageSize(body.size);
 
-  const request = payloadBody => fetchJson(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authorization(apiKey) },
-    body: JSON.stringify(payloadBody),
-    signal,
-  }, preset.timeoutMs, { keepWaiting: settings?.keepWaitingOnTimeout !== false, onTimeout });
+  const request = payloadBody => {
+    onRequestParameters?.({ size: payloadBody.size ?? null, quality: payloadBody.quality ?? null });
+    return fetchJson(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authorization(apiKey) },
+      body: JSON.stringify(payloadBody),
+      signal,
+    }, preset.timeoutMs, { keepWaiting: settings?.keepWaitingOnTimeout !== false, onTimeout });
+  };
   let compatibilityRetry;
   try {
     const payload = await runGenerationWithRetry({

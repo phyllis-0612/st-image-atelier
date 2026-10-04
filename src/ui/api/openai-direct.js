@@ -234,6 +234,7 @@ export async function generateImages({
   onRetry,
   retryDelays,
   onTimeout,
+  onRequestParameters,
 }) {
   if (!preset.baseUrl) throw new DirectError('PRESET_NOT_CONFIGURED');
   if (!apiKey) throw new DirectError('API_KEY_MISSING');
@@ -255,12 +256,15 @@ export async function generateImages({
   body.model = preset.selectedModel;
   body.prompt = prompt.trim();
   if ('size' in body) body.size = normalizeImageSize(body.size);
-  const request = payloadBody => fetchJson(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authorization(apiKey) },
-    body: JSON.stringify(payloadBody),
-    signal,
-  }, preset.timeoutMs, { keepWaiting: settings?.keepWaitingOnTimeout !== false, onTimeout });
+  const request = payloadBody => {
+    onRequestParameters?.({ size: payloadBody.size ?? null, quality: payloadBody.quality ?? null });
+    return fetchJson(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authorization(apiKey) },
+      body: JSON.stringify(payloadBody),
+      signal,
+    }, preset.timeoutMs, { keepWaiting: settings?.keepWaitingOnTimeout !== false, onTimeout });
+  };
   let compatibilityRetry;
   try {
     const payload = await runGenerationWithRetry({
