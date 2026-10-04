@@ -848,6 +848,31 @@
 .stia-card__meta--quality { flex: 0 1 auto; max-width: 100%; }
 .stia-card__meta--model { flex: 1 1 220px; }
 
+.stia-card__pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.stia-card__page-button {
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+.stia-card__page-count {
+  min-width: 42px;
+  color: var(--stia-secondary);
+  text-align: center;
+  white-space: nowrap;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .stia-success {
   color: var(--stia-success);
 }

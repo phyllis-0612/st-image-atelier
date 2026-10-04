@@ -316,3 +316,159 @@ test('图片元数据来自回图快照，尺寸在历史旁边，信息更新�
   assert.match(card.querySelector('.stia-card__metadata').textContent, /原预设快照/);
   assert.match(card.querySelector('.stia-card__meta--quality').textContent, /未发送/);
 });
+
+function addHistory(state, store, total = 3) {
+  state.attempts = [];
+  state.results = Array.from({ length: total }, (_, index) => ({
+    resultId: `page-${index + 1}`, attemptId: `attempt-${index + 1}`, status: 'available',
+    prompt: `prompt ${index + 1}`, negativePrompt: `negative ${index + 1}`,
+    presetNameSnapshot: `preset ${index + 1}`, apiModel: `model ${index + 1}`,
+    parameters: { size: `${512 + index * 256}x768`, quality: index === 0 ? 'hd' : 'xhigh' },
+  }));
+  state.tag.resultIds = state.results.map(item => item.resultId);
+  state.tag.latestResultId = state.tag.resultIds.at(-1);
+  store.setTag('tag-1', state);
+}
+
+function currentPage(card) { return card.querySelector('.stia-card__page-count')?.textContent; }
+function previousPage(card) { card.querySelector('.stia-card__page-previous').click(); }
+function nextPage(card) { card.querySelector('.stia-card__page-next').click(); }
+
+test('同卡片上一张下一张同步图片、参数、提示词和查看原图，边界禁用且不改保存记录', t => {
+  const { dom, container, state, store, adjusted } = setup(t);
+  store.set({ settings: { ...store.state.settings, enablePromptOverrideRegenerate: true } });
+  const card = container.querySelector('.stia-card');
+  assert.equal(card.querySelector('.stia-card__pagination'), null, '只有一张图不增加控件');
+  addHistory(state, store);
+  const savedTag = structuredClone(state.tag);
+  assert.equal(currentPage(card), '3 / 3');
+  assert.equal(card.querySelector('.stia-card__page-next').disabled, true);
+  card.querySelector('.stia-card__page-previous').focus();
+  previousPage(card);
+  assert.equal(document.activeElement, card.querySelector('.stia-card__page-previous'), '键盘翻页后保留控制焦点');
+  assert.equal(currentPage(card), '2 / 3');
+  assert.equal(card.querySelector('img').getAttribute('src'), '/images/page-2.png');
+  assert.match(card.querySelector('.stia-card__metadata').textContent, /preset 2/);
+  assert.match(card.querySelector('.stia-card__metadata').textContent, /model 2/);
+  assert.equal(card.querySelector('.stia-card__size').textContent, '768×768');
+  assert.equal(card.querySelector('.stia-prompt pre').textContent, 'prompt 2');
+  previousPage(card);
+  assert.equal(currentPage(card), '1 / 3');
+  assert.equal(document.activeElement, card.querySelector('.stia-card__page-count'));
+  assert.equal(card.querySelector('.stia-card__page-previous').disabled, true);
+  assert.match(card.querySelector('.stia-card__meta--quality').textContent, /hd/);
+  previousPage(card);
+  assert.equal(currentPage(card), '1 / 3');
+  [...card.querySelectorAll('button')].find(button => button.textContent.includes('调整后重绘')).click();
+  assert.equal(adjusted[0][1].prompt, 'prompt 1');
+  assert.equal(adjusted[0][1].negativePrompt, 'negative 1');
+  assert.equal(adjusted[0][1].result.resultId, 'page-1');
+  card.querySelector('img').click();
+  assert.equal(dom.window.document.querySelector('.stia-image-viewer__image').getAttribute('src'), '/images/page-1.png');
+  assert.equal(dom.window.document.querySelector('.stia-image-viewer__prompt pre').textContent, 'prompt 1');
+  dom.window.document.querySelector('.stia-image-viewer__close').click();
+  nextPage(card);
+  nextPage(card);
+  nextPage(card);
+  assert.equal(currentPage(card), '3 / 3');
+  assert.deepEqual(state.tag, savedTag, '翻页不能写 latestResultId 或改变历史顺序');
+});
+
+test('查看旧图期间保留选择，新回图只更新页数；回到最新后恢复跟随', t => {
+  const { dom, container, state, store } = setup(t);
+  addHistory(state, store);
+  const card = container.querySelector('.stia-card');
+  previousPage(card);
+  const image = card.querySelector('img');
+  const observer = new dom.window.MutationObserver(() => {});
+  observer.observe(card, { childList: true, attributes: true, characterData: true, subtree: true });
+  store.setTag('tag-1', structuredClone(state));
+  store.setTag('another-tag', { results: [] });
+  assert.deepEqual(observer.takeRecords(), []);
+  state.results.push({ ...state.results[2], resultId: 'page-4', prompt: 'new image' });
+  state.tag.resultIds.push('page-4');
+  state.tag.latestResultId = 'page-4';
+  store.setTag('tag-1', state);
+  assert.equal(currentPage(card), '2 / 4');
+  assert.equal(card.querySelector('img'), image);
+  assert.equal(card.querySelector('img').getAttribute('src'), '/images/page-2.png');
+  nextPage(card);
+  nextPage(card);
+  assert.equal(currentPage(card), '4 / 4');
+  state.results.push({ ...state.results[3], resultId: 'page-5' });
+  state.tag.resultIds.push('page-5');
+  state.tag.latestResultId = 'page-5';
+  store.setTag('tag-1', state);
+  assert.equal(currentPage(card), '5 / 5');
+  assert.equal(card.querySelector('img').getAttribute('src'), '/images/page-5.png');
+  observer.disconnect();
+});
+
+test('历史图片删除与清理后不会留下空白页，乱序响应仍按标签历史顺序翻页', t => {
+  const { container, state, store } = setup(t);
+  addHistory(state, store);
+  const card = container.querySelector('.stia-card');
+  state.results.reverse();
+  store.setTag('tag-1', state);
+  previousPage(card);
+  assert.equal(card.querySelector('img').getAttribute('src'), '/images/page-2.png');
+  state.results = state.results.filter(item => item.resultId !== 'page-2');
+  state.tag.resultIds = state.tag.resultIds.filter(id => id !== 'page-2');
+  store.setTag('tag-1', state);
+  assert.equal(currentPage(card), '2 / 2');
+  assert.equal(card.querySelector('img').getAttribute('src'), '/images/page-3.png');
+  state.results = state.results.filter(item => item.resultId === 'page-1');
+  state.tag.resultIds = ['page-1'];
+  store.setTag('tag-1', state);
+  assert.equal(card.querySelector('.stia-card__pagination'), null);
+  assert.equal(card.querySelector('img').getAttribute('src'), '/images/page-1.png');
+  state.results = [];
+  state.tag.resultIds = [];
+  store.setTag('tag-1', state);
+  assert.equal(card.querySelector('img'), null);
+  assert.equal(card.querySelector('.stia-card__pagination'), null);
+});
+
+test('同层多个卡片独立翻页，正文重建复用卡片时保留正在查看的旧图', t => {
+  const { container, renderer, tag, state, store } = setup(t);
+  addHistory(state, store);
+  const second = { ...tag, tagId: 'tag-2', prompt: 'second prompt', ordinal: 1 };
+  const secondState = structuredClone(state);
+  store.setTag(second.tagId, secondState);
+  const html = '<draw>cat by a window</draw><p>中间正文</p><draw>second prompt</draw>';
+  container.innerHTML = html;
+  renderer.mount('0', [tag, second]);
+  const cards = [...container.querySelectorAll('.stia-card')];
+  previousPage(cards[0]);
+  assert.equal(currentPage(cards[0]), '2 / 3');
+  assert.equal(currentPage(cards[1]), '3 / 3');
+  const selectedImage = cards[0].querySelector('img');
+  container.innerHTML = html;
+  renderer.mount('0', [tag, second]);
+  assert.equal(container.querySelector('.stia-card'), cards[0]);
+  assert.equal(cards[0].querySelector('img'), selectedImage);
+  assert.equal(currentPage(cards[0]), '2 / 3');
+  assert.equal(currentPage(cards[1]), '3 / 3');
+});
+
+test('并行任务运行时查看旧图不隐藏图片和取消控件，进度更新也不跳页', t => {
+  const { container, state, store } = setup(t);
+  addHistory(state, store, 2);
+  state.attempts = [
+    { attemptId: 'attempt-2', status: 'succeeded', parallel: true, createdAt: '2026-10-04T00:00:02Z' },
+    { attemptId: 'running', status: 'generating', createdAt: '2026-10-04T00:00:01Z' },
+    { attemptId: 'attempt-1', status: 'succeeded', createdAt: '2026-10-04T00:00:00Z' },
+  ];
+  store.setTag('tag-1', state);
+  const card = container.querySelector('.stia-card');
+  previousPage(card);
+  const image = card.querySelector('img');
+  assert.equal(currentPage(card), '1 / 2');
+  assert.equal(image.getAttribute('src'), '/images/page-1.png');
+  assert.equal(card.querySelectorAll('.stia-card__task').length, 1);
+  state.attempts[1].statusMessage = 'still waiting';
+  store.setTag('tag-1', state);
+  assert.equal(card.querySelector('img'), image);
+  assert.equal(currentPage(card), '1 / 2');
+  assert.match(card.textContent, /still waiting/);
+});

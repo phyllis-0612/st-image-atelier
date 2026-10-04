@@ -84,6 +84,42 @@ export function createCard({
   let renderedBody;
   let mediaCache;
   let currentView;
+  // Local browsing state: viewing history must not change the saved latest image.
+  let selectedResultId;
+
+  function changeImage(offset) {
+    const { available, imageIndex, newest } = currentView;
+    const target = available[imageIndex + offset];
+    if (!target) return;
+    const restoreFocus = document.activeElement?.classList?.contains('stia-card__page-button')
+      && root.contains?.(document.activeElement);
+    selectedResultId = target.resultId === newest.resultId ? undefined : target.resultId;
+    render();
+    if (restoreFocus) {
+      const control = root.querySelector(offset < 0 ? '.stia-card__page-previous' : '.stia-card__page-next');
+      const focusTarget = control?.disabled ? root.querySelector('.stia-card__page-count') : control;
+      focusTarget?.focus({ preventScroll: true });
+    }
+  }
+
+  function pagination(available, imageIndex) {
+    if (available.length < 2) return null;
+    const controls = document.createElement('nav');
+    controls.className = 'stia-card__pagination';
+    controls.setAttribute('aria-label', '图片历史翻页');
+    const previous = button('上一张', 'stia-card__page-button stia-card__page-previous', () => changeImage(-1), '‹');
+    previous.disabled = imageIndex === 0;
+    const count = document.createElement('span');
+    count.className = 'stia-card__page-count';
+    count.tabIndex = -1;
+    count.setAttribute('aria-live', 'polite');
+    count.textContent = `${imageIndex + 1} / ${available.length}`;
+    count.setAttribute('aria-label', `第 ${imageIndex + 1} 张，共 ${available.length} 张`);
+    const next = button('下一张', 'stia-card__page-button stia-card__page-next', () => changeImage(1), '›');
+    next.disabled = imageIndex === available.length - 1;
+    controls.append(previous, count, next);
+    return controls;
+  }
 
   // 图片只绑定一次事件；复用后读取最新快照，避免回调仍指向旧提示词或旧结果。
   function openOriginal() {
@@ -148,15 +184,24 @@ export function createCard({
     const attempts = state.attempts || [];
     const activeAttempts = attempts.filter(item => ACTIVE_STATUSES.has(item.status));
     const activeAttempt = activeAttempts[0];
-    const available = (state.results || []).filter(result => result.status === 'available');
-    const latest = available.find(result => result.resultId === state.tag?.latestResultId)
+    const resultOrder = new Map((state.tag?.resultIds || []).map((id, index) => [id, index]));
+    const available = (state.results || []).filter(result => result.status === 'available')
+      .sort((left, right) => (resultOrder.get(left.resultId) ?? resultOrder.size) - (resultOrder.get(right.resultId) ?? resultOrder.size));
+    const newest = available.find(result => result.resultId === state.tag?.latestResultId)
       || available.at(-1);
+    if (selectedResultId && !available.some(result => result.resultId === selectedResultId)) {
+      selectedResultId = undefined;
+    }
+    const latest = available.find(result => result.resultId === selectedResultId) || newest;
+    const imageIndex = available.indexOf(latest);
     const resultAttempt = attempts.find(item => item.attemptId === latest?.attemptId);
+    const newestAttempt = attempts.find(item => item.attemptId === newest?.attemptId);
     const hasParallelWork = activeAttempts.length > 1
       || activeAttempts.some(item => item.parallel)
-      || (resultAttempt?.parallel && activeAttempts.some(item => item.createdAt <= resultAttempt.createdAt));
+      || (newestAttempt?.parallel && activeAttempts.some(item => item.createdAt <= newestAttempt.createdAt));
     const attempt = latest && (!activeAttempts.length || hasParallelWork)
-      ? (resultAttempt || attempts[0]) : (activeAttempt || attempts[0]);
+      ? (resultAttempt || (!latest.attemptId ? attempts.find(item => item.status === 'succeeded') : undefined))
+      : (activeAttempt || attempts[0]);
     const actualPrompt = latest?.prompt
       || latest?.promptSnapshot
       || attempt?.promptSnapshot
@@ -183,13 +228,13 @@ export function createCard({
     const mode = active && !(latest && hasParallelWork) ? 'active' : latest ? 'succeeded'
       : attempt && ['failed', 'interrupted', 'cancelled'].includes(attempt.status) ? 'failed' : 'idle';
     const imageSrc = mode === 'succeeded' ? api.fileUrl(latest.resultId) : '';
-    currentView = { latest, attempt, actualPrompt, actualNegativePrompt, size, imageSrc, metadata };
+    currentView = { latest, attempt, actualPrompt, actualNegativePrompt, size, imageSrc, metadata, available, imageIndex, newest };
     // 只比较实际画面需要的数据，不受其他卡片、更新时间、收藏或无关设置影响。
     const signature = JSON.stringify(mode === 'active'
       ? [mode, attempt.attemptId, attempt.status, attempt.requestMode, attempt.statusMessage,
         attempt.model, size, Boolean(latest)]
       : mode === 'succeeded'
-        ? [mode, latest.resultId, imageSrc, actualPrompt, size, available.length, canAdjust, metadata]
+        ? [mode, latest.resultId, imageSrc, actualPrompt, size, available.map(item => item.resultId), imageIndex, canAdjust, metadata]
         : [mode, attempt?.status, attempt?.model, attempt?.errorMessage, Boolean(attempt),
           size, ratioLabel, actualPrompt, canAdjust, Boolean(state.tag?.resultIds?.length)])
       + JSON.stringify(activeAttempts.map(item => [item.attemptId, item.status, item.statusMessage, item.model, item.presetNameSnapshot, item.parameters?.size]));
@@ -297,7 +342,10 @@ export function createCard({
       if (canAdjust) {
         actions.append(button('调整后重绘', '', adjustRegenerate, '✎'));
       }
-      body.append(completion, info, actions, details());
+      body.append(completion, info);
+      const pages = pagination(available, imageIndex);
+      if (pages) body.append(pages);
+      body.append(actions, details());
       if (active) body.append(pendingControls(activeAttempts, { showRoll: false }));
       if (media.parentNode === root) {
         // 同一张图仍在原位置：仅替换文字与按钮，图片不摘下、不重写 src。
