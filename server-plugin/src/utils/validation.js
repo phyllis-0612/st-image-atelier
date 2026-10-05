@@ -37,8 +37,8 @@ function detectImageType(buffer) {
 }
 
 function validatePrompt(prompt) {
-  if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) {
-    throw new AppError('VALIDATION_FAILED', '提示词必须为 1-20000 个字符');
+  if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 32_000) {
+    throw new AppError('VALIDATION_FAILED', '提示词必须为 1-32000 个字符');
   }
   return prompt.trim();
 }

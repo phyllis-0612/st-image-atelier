@@ -239,8 +239,8 @@ export async function generateImages({
   if (!preset.baseUrl) throw new DirectError('PRESET_NOT_CONFIGURED');
   if (!apiKey) throw new DirectError('API_KEY_MISSING');
   if (!preset.selectedModel) throw new DirectError('MODEL_NOT_SELECTED');
-  if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) {
-    throw new DirectError('VALIDATION_FAILED', '提示词必须为 1-20000 个字符');
+  if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 32_000) {
+    throw new DirectError('VALIDATION_FAILED', '提示词必须为 1-32000 个字符');
   }
   const endpoint = normalizeEndpoint(preset.baseUrl, preset.generationPath);
   validateEndpoint(endpoint, settings.allowHttp);

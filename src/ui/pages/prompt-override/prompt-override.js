@@ -1,8 +1,13 @@
-export function validatePromptOverride(prompt, negativePrompt = '') {
+function promptLimit(provider) {
+  return provider === 'novelai' ? 20_000 : 32_000;
+}
+
+export function validatePromptOverride(prompt, negativePrompt = '', provider = 'openai') {
   const normalizedPrompt = String(prompt || '').trim();
   const normalizedNegative = String(negativePrompt || '').trim();
   if (!normalizedPrompt) throw new Error('本次提示词不能为空');
-  if (normalizedPrompt.length > 20_000) throw new Error('本次提示词不能超过 20000 个字符');
+  const limit = promptLimit(provider);
+  if (normalizedPrompt.length > limit) throw new Error(`本次提示词不能超过 ${limit} 个字符`);
   if (normalizedNegative.length > 20_000) throw new Error('本次负面提示词不能超过 20000 个字符');
   return { prompt: normalizedPrompt, negativePrompt: normalizedNegative };
 }
@@ -40,7 +45,7 @@ export function createPromptOverrideDialog() {
   hint.textContent = '本次修改只用于下一次生成，不会改写聊天正文或原生图标签。';
   const prompt = document.createElement('textarea');
   prompt.rows = 9;
-  prompt.maxLength = 20_000;
+  prompt.maxLength = promptLimit('openai');
   const negative = document.createElement('textarea');
   negative.rows = 5;
   negative.maxLength = 20_000;
@@ -59,6 +64,7 @@ export function createPromptOverrideDialog() {
   document.body.append(overlay);
 
   let resolvePending = null;
+  let currentProvider = 'openai';
 
   function finish(value) {
     if (!resolvePending) return;
@@ -78,7 +84,7 @@ export function createPromptOverrideDialog() {
   });
   submit.addEventListener('click', () => {
     try {
-      const value = validatePromptOverride(prompt.value, negative.value);
+      const value = validatePromptOverride(prompt.value, negative.value, currentProvider);
       error.hidden = true;
       finish(value);
     } catch (validationError) {
@@ -89,6 +95,8 @@ export function createPromptOverrideDialog() {
 
   function open({ prompt: initialPrompt, negativePrompt = '', provider = 'openai' }) {
     if (resolvePending) finish(null);
+    currentProvider = provider;
+    prompt.maxLength = promptLimit(provider);
     prompt.value = String(initialPrompt || '');
     negative.value = String(negativePrompt || '');
     negativeField.hidden = provider !== 'novelai';

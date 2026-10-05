@@ -20,9 +20,13 @@ function withDom(t) {
   return dom;
 }
 
-test('临时提示词校验非空与 20000 字符上限', () => {
+test('临时提示词 GPT 上限 32000，NovelAI 正负面上限保持 20000', () => {
   assert.throws(() => validatePromptOverride('   '), /不能为空/);
-  assert.throws(() => validatePromptOverride('x'.repeat(20_001)), /20000/);
+  assert.equal(validatePromptOverride('画'.repeat(32_000)).prompt.length, 32_000);
+  assert.throws(() => validatePromptOverride('x'.repeat(32_001)), /32000/);
+  assert.equal(validatePromptOverride('x'.repeat(20_000), '', 'novelai').prompt.length, 20_000);
+  assert.throws(() => validatePromptOverride('x'.repeat(20_001), '', 'novelai'), /20000/);
+  assert.equal(validatePromptOverride('ok', 'x'.repeat(20_000), 'novelai').negativePrompt.length, 20_000);
   assert.throws(() => validatePromptOverride('ok', 'x'.repeat(20_001)), /20000/);
   assert.deepEqual(validatePromptOverride('  new prompt  ', '  bad hands  '), {
     prompt: 'new prompt',
@@ -34,6 +38,7 @@ test('弹窗取消不提交；NovelAI 显示并提交临时负面提示词', asy
   withDom(t);
   const dialog = createPromptOverrideDialog();
   const cancelled = dialog.open({ prompt: 'old prompt' });
+  assert.equal(dialog.root.querySelector('textarea').maxLength, 32_000);
   dialog.root.querySelector('button').click();
   assert.equal(await cancelled, null);
 
@@ -43,12 +48,20 @@ test('弹窗取消不提交；NovelAI 显示并提交临时负面提示词', asy
     provider: 'novelai',
   });
   const textareas = dialog.root.querySelectorAll('textarea');
+  assert.equal(textareas[0].maxLength, 20_000);
+  assert.equal(textareas[1].maxLength, 20_000);
   assert.equal(textareas[1].closest('label').hidden, false);
   textareas[0].value = 'next prompt';
   textareas[1].value = 'next negative';
   [...dialog.root.querySelectorAll('button')]
     .find(button => button.textContent === '用此提示词生成').click();
   assert.deepEqual(await submitted, { prompt: 'next prompt', negativePrompt: 'next negative' });
+
+  const gptSubmitted = dialog.open({ prompt: '画'.repeat(32_000) });
+  assert.equal(textareas[0].maxLength, 32_000);
+  [...dialog.root.querySelectorAll('button')]
+    .find(button => button.textContent === '用此提示词生成').click();
+  assert.equal((await gptSubmitted).prompt.length, 32_000);
 });
 
 test('调整后重绘入口受总开关控制，并以上次实际提示词快照为起点', t => {

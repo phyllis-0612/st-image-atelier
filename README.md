@@ -38,6 +38,8 @@ https://github.com/phyllis-0612/st-image-atelier
 
 默认手动点击生成；自动生图默认关闭。
 
+从 1.6.11 起，GPT / OpenAI 生图提示词上限为 32,000 个字符，直连、服务端模式及「调整后重绘」均支持；超限会在发送请求前提示，不会截断后发送。使用服务端模式时需同步更新可选 Server Plugin 至 1.3.6 并重启酒馆。NovelAI 正负面提示词仍各限 20,000 个字符；中转站可能有自己的更低上限。
+
 ### NovelAI
 
 1. 切换到「NovelAI」。NAI 固定使用免服务端直连，不需要 Server Plugin。

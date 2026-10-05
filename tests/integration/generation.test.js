@@ -102,6 +102,20 @@ function request(prompt, overrides = {}) {
   };
 }
 
+test('服务端完整发送并保存 32000 字符提示词，超限在请求上游前拦截', async t => {
+  const f = await fixture(t);
+  const prompt = '画'.repeat(32_000);
+  const input = request(prompt);
+  await f.generation.generate(input);
+  const attempt = await waitForAttempt(f.metadata, input.attemptId);
+  assert.equal(attempt.status, 'succeeded');
+  assert.equal(f.upstream.state.generationBodies[0].prompt, prompt);
+  assert.equal(f.metadata.getResult(attempt.resultIds[0]).prompt, prompt);
+  await assert.rejects(f.generation.generate(request('x'.repeat(32_001))),
+    error => error.code === 'VALIDATION_FAILED' && /32000/.test(error.details));
+  assert.equal(f.upstream.state.generationCalls, 1);
+});
+
 test('服务端连续 5xx 最多重试三次，终止后重复提交同一任务不会重新请求', async t => {
   const f = await fixture(t);
   await f.preset.updateSettings({ enableSmartRetry: true });

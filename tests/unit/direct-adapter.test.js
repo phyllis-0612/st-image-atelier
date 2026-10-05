@@ -159,6 +159,19 @@ function captureFetch(t, handler) {
 
 const OK = () => new Response(JSON.stringify({ data: [{ b64_json: 'AAAA' }] }), { status: 200 });
 
+test('GPT 直连完整发送 32000 字符，超限和空提示词不会请求上游', async t => {
+  const bodies = captureFetch(t, OK);
+  const options = { preset: presetFor(), apiKey: 'sk-test', parameters: {}, settings: {} };
+  const prompt = '画'.repeat(32_000);
+  await generateImages({ ...options, prompt });
+  assert.equal(bodies[0].prompt, prompt);
+  await assert.rejects(generateImages({ ...options, prompt: 'x'.repeat(32_001) }),
+    error => error.code === 'VALIDATION_FAILED' && /32000/.test(error.details));
+  await assert.rejects(generateImages({ ...options, prompt: '   ' }),
+    error => error.code === 'VALIDATION_FAILED');
+  assert.equal(bodies.length, 1);
+});
+
 test('旧预设没有 responseFormat 字段时默认请求 b64_json', async t => {
   const bodies = captureFetch(t, OK);
   await generateImages({ preset: presetFor(), apiKey: 'sk', prompt: 'x', parameters: {}, settings: {} });

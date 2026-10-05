@@ -23,6 +23,7 @@ export async function startMockUpstream() {
     if (request.url === '/v1/images/generations' && request.method === 'POST') {
       state.generationCalls += 1;
       let raw = '';
+      request.setEncoding('utf8');
       for await (const chunk of request) raw += chunk;
       const body = JSON.parse(raw);
       state.generationBodies.push(body);
