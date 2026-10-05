@@ -792,6 +792,19 @@
   font-size: 12px;
 }
 
+.stia-card__done {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.stia-card__duration {
+  white-space: nowrap;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .stia-card__history {
   display: inline-flex;
   align-items: center;

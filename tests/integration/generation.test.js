@@ -472,6 +472,11 @@ test('服务端图片也保存最终请求的质量与尺寸，不套用当前�
   const first = await waitForAttempt(f.metadata, input.attemptId);
   assert.equal(first.status, 'succeeded');
   assert.deepEqual(f.metadata.getResult(first.resultIds[0]).parameters, { quality: 'xhigh', size: '512x768' });
+  const duration = f.metadata.getResult(first.resultIds[0]).generationDurationMs;
+  assert.equal(Number.isFinite(duration), true);
+  assert.ok(duration >= 0 && duration <= Date.parse(first.completedAt) - Date.parse(first.createdAt));
+  const reloaded = await new MetadataStore(f.root).initialize();
+  assert.equal(reloaded.getResult(first.resultIds[0]).generationDurationMs, duration);
   await f.preset.update({ sendQuality: false });
   const skipped = request('omitted');
   await f.generation.generate(skipped);

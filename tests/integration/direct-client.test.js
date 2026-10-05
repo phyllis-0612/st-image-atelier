@@ -519,12 +519,16 @@ test('GPT 临时提示词覆盖只用于本次请求，保存快照且不改原�
   assert.equal('promptSnapshot' in result, false);
   assert.equal('resolvedPrompt' in result, false);
   assert.deepEqual(result.compatibilityRetry.adjustedParameters, ['response_format']);
+  assert.equal(Number.isFinite(result.generationDurationMs), true);
+  assert.ok(result.generationDurationMs >= 0);
+  assert.ok(result.generationDurationMs <= Date.parse(attempt.completedAt) - Date.parse(attempt.createdAt));
 
   await client.setFavorite(result.resultId, true);
   assert.equal((await client.galleryMetadata()).items[0].favorite, true);
   assert.equal('gallery' in extensionSettings.stImageAtelier, false);
   const reloaded = createDirectApiClient(options);
   assert.equal((await reloaded.galleryMetadata()).items[0].favorite, true);
+  assert.equal((await reloaded.galleryMetadata()).items[0].generationDurationMs, result.generationDurationMs);
 });
 
 test('旧版单预设迁移为多预设，且每个预设独立保存密钥', async () => {

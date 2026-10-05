@@ -3,6 +3,50 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { createMessageRenderer } from '../../src/ui/renderer/message-renderer.js';
 import { createStore } from '../../src/ui/state/store.js';
+import { imageDuration } from '../../src/ui/media/image-metadata.js';
+
+test('图片用时格式化秒、分和小时，旧图仅按对应任务补算，缺失或无效记录不显示', () => {
+  for (const [milliseconds, expected] of [[0, '1秒'], [999, '1秒'], [59000, '59秒'],
+    [60000, '1分'], [83000, '1分23秒'], [1000000, '16分40秒'], [3661000, '1小时1分1秒']]) {
+    assert.equal(imageDuration({ generationDurationMs: milliseconds }), expected);
+  }
+  const attempt = { attemptId: 'a', createdAt: '2026-10-05T00:00:00Z', completedAt: '2026-10-05T00:01:23Z' };
+  assert.equal(imageDuration({ attemptId: 'a' }, attempt), '1分23秒');
+  assert.equal(imageDuration({ attemptId: 'other' }, attempt), '');
+  assert.equal(imageDuration({}, attempt), '');
+  assert.equal(imageDuration({ generationDurationMs: null }), '');
+  assert.equal(imageDuration({ generationDurationMs: -1 }), '');
+  assert.equal(imageDuration({ generationDurationMs: NaN }), '');
+  assert.equal(imageDuration({ attemptId: 'a' }, { ...attempt, completedAt: 'invalid' }), '');
+  assert.equal(imageDuration({ attemptId: 'a' }, { ...attempt, completedAt: '2026-10-04T00:00:00Z' }), '');
+});
+
+test('已完成后显示当前图片用时，翻页和任务记录清理后仍准确，补齐时间不摘下图片', t => {
+  const { container, state, store } = setup(t);
+  addHistory(state, store);
+  state.results[0].generationDurationMs = 83000;
+  state.results[1].generationDurationMs = 1000000;
+  state.results[2].generationDurationMs = 45000;
+  store.setTag('tag-1', state);
+  const card = container.querySelector('.stia-card');
+  assert.equal(card.querySelector('.stia-card__done').textContent, '✓ 已完成· 用时 45秒');
+  assert.equal(card.querySelector('.stia-card__done').firstChild.className, 'stia-success');
+  previousPage(card);
+  assert.equal(card.querySelector('.stia-card__duration').textContent, '· 用时 16分40秒');
+  state.attempts = [];
+  store.setTag('tag-1', state);
+  assert.equal(card.querySelector('.stia-card__duration').textContent, '· 用时 16分40秒');
+  previousPage(card);
+  assert.equal(card.querySelector('.stia-card__duration').textContent, '· 用时 1分23秒');
+  delete state.results[0].generationDurationMs;
+  store.setTag('tag-1', state);
+  assert.equal(card.querySelector('.stia-card__duration'), null);
+  const image = card.querySelector('img');
+  state.results[0].generationDurationMs = 61000;
+  store.setTag('tag-1', state);
+  assert.equal(card.querySelector('.stia-card__duration').textContent, '· 用时 1分1秒');
+  assert.equal(card.querySelector('img'), image);
+});
 
 for (const first of ['old', 'new']) {
   test(`并行请求 ${first} 先回图时立即显示，另一条仍可取消和重 roll`, t => {

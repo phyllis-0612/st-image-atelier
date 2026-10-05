@@ -168,6 +168,7 @@ class GenerationService {
           ...saved,
           sourceType: source.sourceType,
           status: 'available',
+          generationDurationMs: Math.max(0, Date.now() - Date.parse(attempt.createdAt)),
           createdAt: timestamp(),
           favorite: false,
           compatibilityRetry: attempt.compatibilityRetry || null,

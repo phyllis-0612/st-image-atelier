@@ -461,6 +461,7 @@ export function createDirectApiClient({
       sourceType: source.sourceType,
       status: 'available',
       storageMode: 'direct',
+      generationDurationMs: Math.max(0, Date.now() - Date.parse(attempt.createdAt)),
       createdAt: now(),
       favorite: false,
       compatibilityRetry: attempt.compatibilityRetry || null,
