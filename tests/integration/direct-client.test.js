@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { createDirectApiClient } from '../../src/ui/api/direct-client.js';
 import { createMemoryGalleryMetadataStore } from '../../src/ui/api/gallery-metadata-store.js';
+import { tagBytes, warnLargeTags } from '../../src/ui/state/tag-footprint.js';
 import { PNG_BASE64, startMockUpstream } from '../mocks/mock-upstream.js';
 import { createGenerationNotifications } from '../../src/ui/state/generation-notifications.js';
 import { createGenerationRunner } from '../../src/ui/state/generation-runner.js';
@@ -10,7 +11,7 @@ import { createStore } from '../../src/ui/state/store.js';
 
 async function waitUntil(predicate) {
   for (let index = 0; index < 200; index++) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise(resolve => setTimeout(resolve, 5));
   }
   throw new Error('等待测试请求超时');
@@ -21,13 +22,17 @@ async function concurrentFixture(t, clock = {}) {
   t.after(() => { globalThis.fetch = originalFetch; });
   const requests = [];
   const uploads = [];
+  const deleted = [];
   globalThis.fetch = async (url, options) => {
     if (url === '/api/images/upload') {
       const input = JSON.parse(options.body);
       uploads.push(input.filename);
       return response(200, { path: `user/images/${input.filename}.${input.format}` });
     }
-    if (url === '/api/images/delete') return response(200, {});
+    if (url === '/api/images/delete') {
+      deleted.push(JSON.parse(options.body).path);
+      return response(200, {});
+    }
     return new Promise((resolve, reject) => {
       requests.push({ url, body: JSON.parse(options.body), key: options.headers.Authorization, signal: options.signal,
         finish: () => resolve(response(200, { data: [{ b64_json: PNG_BASE64 }] })) });
@@ -44,8 +49,24 @@ async function concurrentFixture(t, clock = {}) {
   await client.updatePreset({ baseUrl: 'https://example.com', apiKey: 'key-old', selectedModel: 'image', timeoutMs: 5 });
   const store = createStore();
   const runner = createGenerationRunner({ api: client, compat, store, ...clock, uuid: () => crypto.randomUUID() });
-  return { client, runner, store, tag, requests, uploads };
+  return { client, runner, store, tag, requests, uploads, deleted };
 }
+
+test('同一标签最多保存八张历史图，超出的旧图片从画廊与磁盘硬删除', async t => {
+  const f = await concurrentFixture(t);
+  const ids = [];
+  for (let index = 0; index < 9; index++) {
+    const generation = f.runner.generate(f.tag, 'manual');
+    await waitUntil(() => f.requests.length === index + 1);
+    f.requests[index].finish();
+    ids.push((await generation).resultIds[0]);
+  }
+  const [state] = await f.client.resolveTags([f.tag.tagId]);
+  assert.deepEqual(state.tag.resultIds, ids.slice(1));
+  assert.equal(state.results.length, 8);
+  assert.equal((await f.client.galleryMetadata()).total, 8);
+  assert.deepEqual(f.deleted, [`user/images/${ids[0]}.png`]);
+});
 
 for (const first of [0, 1]) {
   test(`直连换 Key 并行生成，第 ${first + 1} 个请求先回图，两次结果和历史都保留`, async t => {
@@ -57,7 +78,8 @@ for (const first of [0, 1]) {
     const newer = f.runner.generate(f.tag, 'manual');
     await waitUntil(() => f.requests.length === 2);
     assert.deepEqual(f.requests.map(item => item.key), ['Bearer key-old', 'Bearer key-new']);
-    await waitUntil(() => f.tag.attempts.every(item => item.statusMessage?.includes('仍在等待')));
+    await waitUntil(async () => (await f.client.resolveTags([f.tag.tagId]))[0].attempts
+      .filter(item => item.status === 'generating' && item.statusMessage?.includes('仍在等待')).length === 2);
     assert.equal(f.requests.every(item => !item.signal.aborted), true);
     assert.equal(f.requests.length, 2, '等待提醒不额外扣费重发');
     const works = [old, newer];
@@ -86,7 +108,7 @@ test('取消一条并行请求不影响另一条请求回图', async t => {
   const old = f.runner.generate(f.tag, 'manual');
   const newer = f.runner.generate(f.tag, 'manual');
   await waitUntil(() => f.requests.length === 2);
-  const newestId = f.tag.attempts[0].attemptId;
+  const newestId = f.store.state.tagStates.get(f.tag.tagId).attempts[0].attemptId;
   await f.client.cancel(newestId);
   assert.equal((await newer).status, 'cancelled');
   assert.equal(f.requests[0].signal.aborted, false);
@@ -115,7 +137,8 @@ for (const first of [0, 1]) {
     assert.match(f.requests[1].url, /^https:\/\/backup\.example\.com/);
     assert.equal(f.requests[1].body.model, 'backup-image');
     assert.equal(f.requests[1].body.prompt, 'edited');
-    await waitUntil(() => f.tag.attempts.every(item => item.statusMessage?.includes('仍在等待')));
+    await waitUntil(async () => (await f.client.resolveTags([f.tag.tagId]))[0].attempts
+      .filter(item => item.status === 'generating' && item.statusMessage?.includes('仍在等待')).length === 2);
     assert.ok(f.requests.every(item => !item.signal.aborted), '主请求与备用都越过硬超时继续接图');
     assert.equal((await f.client.getPresets()).activePresetId, 'default');
     f.requests[first].finish();
@@ -298,7 +321,7 @@ test('仓库链接直装模式完成生成、幂等、画廊与删除', async t 
   assert.equal(attempt.status, 'succeeded');
   assert.equal(attempt.resultIds.length, 1);
   assert.equal(uploads.size, 1);
-  assert.ok(chatSaves >= 4);
+  assert.ok(chatSaves >= 1);
   assert.ok(settingsSaves >= 3);
 
   const duplicate = await client.generate(input);
@@ -783,7 +806,7 @@ test('直连画廊按时间或数量自动清理，合并并发检查且真删�
     values[2].resultId,
   ]);
   assert.equal((await client.resolveTags([tagId]))[0].results.length, 2);
-  assert.equal('results' in tag, false);
+  assert.deepEqual(tag.results.map(item => item.resultId), values.slice(2).map(item => item.resultId));
   assert.equal('gallery' in extensionSettings.stImageAtelier, false);
   assert.equal('deletedResultIds' in extensionSettings.stImageAtelier, false);
 });
@@ -920,7 +943,7 @@ test('独立画廊文件写入失败时保留旧 settings 数据以便重试', a
   assert.equal(extensionSettings.stImageAtelier.schemaVersion, 6);
 });
 
-test('已迁移版本不会从旧聊天副本复活已删除的画廊记录', async () => {
+test('旧聊天副本不会自动复活已删除的画廊记录', async () => {
   const resultId = crypto.randomUUID();
   const tagId = crypto.randomUUID();
   const tag = {
@@ -943,9 +966,128 @@ test('已迁移版本不会从旧聊天副本复活已删除的画廊记录', as
   });
   const [state] = await client.resolveTags([tagId]);
   assert.equal(state.results.length, 0);
-  assert.equal('results' in tag, false);
+  assert.equal('results' in tag, true);
   assert.deepEqual(tag.resultIds, []);
   assert.equal((await client.galleryMetadata()).total, 0);
+});
+
+test('瘦身当前聊天先转存旧图片与任务，再剥离正文和 swipe 副本，重复运行不保存', async () => {
+  const tagId = crypto.randomUUID();
+  const resultId = crypto.randomUUID();
+  const prompt = '山间日出';
+  const result = {
+    resultId, tagId, status: 'available', localRelativePath: 'user/images/st-image-atelier/old.png',
+    createdAt: '2026-10-08T00:00:00.000Z', prompt,
+    rawResponse: 'data:image/png;base64,' + 'z'.repeat(300_000),
+  };
+  const tag = {
+    tagId, ordinal: 0, prompt, resultIds: [resultId], latestResultId: resultId,
+    results: [result], attempts: [{ attemptId: 'a1', tagId, promptSnapshot: prompt.repeat(1000),
+      status: 'succeeded', createdAt: '2026-10-08T00:00:00.000Z', rawResponse: result.rawResponse }],
+    unexpected: result.rawResponse,
+  };
+  const message = { extra: { stImageAtelier: { tags: [structuredClone(tag)] } },
+    swipe_info: [{ extra: { stImageAtelier: { tags: [structuredClone(tag)] } } }] };
+  let saves = 0;
+  const galleryStore = createMemoryGalleryMetadataStore();
+  const client = createDirectApiClient({
+    compat: { chat: () => [message], save: async () => { saves += 1; }, headers: () => ({}) },
+    extensionSettings: {}, saveSettingsDebounced() {}, galleryStore,
+    keyStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  });
+  const before = tagBytes([message]);
+  assert.ok(before > 1_000_000);
+  const first = await client.slimCurrentChat();
+  assert.equal(saves, 1);
+  assert.ok(first.afterBytes < 2_000);
+  assert.equal(first.unresolved, 0);
+  for (const copy of [message, message.swipe_info[0]]) {
+    const slim = copy.extra.stImageAtelier.tags[0];
+    assert.deepEqual(slim.resultIds, [resultId]);
+    assert.equal(slim.resultRefs[0].localRelativePath, result.localRelativePath);
+    assert.equal('attempts' in slim, false);
+    assert.equal('results' in slim, false);
+    assert.equal('unexpected' in slim, false);
+  }
+  assert.equal((await client.resolveTags([tagId]))[0].results[0].localRelativePath, result.localRelativePath);
+  assert.equal(client.fileUrl(resultId), '/user/images/st-image-atelier/old.png');
+  assert.equal(galleryStore.getAttempt('a1').promptSnapshot, prompt.repeat(1000));
+  assert.equal('rawResponse' in galleryStore.get(resultId), false);
+  const second = await client.slimCurrentChat();
+  assert.equal(second.changed, false);
+  assert.equal(saves, 1);
+});
+
+test('单楼 tags 超过 20KB 时显示每个字段字节数', () => {
+  const messages = [];
+  warnLargeTags({ extra: { stImageAtelier: { tags: [{ tagId: 'a', prompt: 'x'.repeat(21_000) }] } } },
+    (...args) => messages.push(args));
+  assert.equal(messages.length, 1);
+  assert.ok(messages[0][1].fields[0].fields.prompt > 20_000);
+});
+
+test('819 楼、每楼旧字段约 23KB 的聊天瘦身后 tags 小于 2MB', async () => {
+  const chat = Array.from({ length: 819 }, (_, index) => ({ extra: { stImageAtelier: {
+    tags: [{ tagId: crypto.randomUUID(), prompt: '场景'.repeat(120), ordinal: 0,
+      resultIds: [], legacyPayload: 'x'.repeat(23_000) }],
+  } } }));
+  let saves = 0;
+  const client = createDirectApiClient({
+    compat: { chat: () => chat, save: async () => { saves += 1; }, headers: () => ({}) },
+    extensionSettings: {}, saveSettingsDebounced() {},
+    galleryStore: createMemoryGalleryMetadataStore(),
+    keyStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  });
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  let result;
+  try { result = await client.slimCurrentChat(); }
+  finally { console.warn = originalWarn; }
+  assert.ok(result.beforeBytes > 18_000_000);
+  assert.ok(result.afterBytes < 2_000_000);
+  assert.equal(saves, 1);
+});
+
+test('切换聊天后仍能从独立文件读取另一个聊天的任务历史', async () => {
+  const galleryStore = createMemoryGalleryMetadataStore();
+  await galleryStore.initialize();
+  const tagIds = [crypto.randomUUID(), crypto.randomUUID()];
+  await galleryStore.putAttempts(tagIds.map((tagId, index) => ({
+    attemptId: `attempt-${index}`, tagId, status: 'succeeded', createdAt: '2026-10-08T00:00:00Z',
+  })));
+  let current = 0;
+  const messages = tagIds.map(tagId => ({ extra: { stImageAtelier: {
+    tags: [{ tagId, prompt: '旧画', resultIds: [] }],
+  } } }));
+  const client = createDirectApiClient({
+    compat: { chat: () => [messages[current]], save: async () => {}, headers: () => ({}) },
+    extensionSettings: {}, saveSettingsDebounced() {}, galleryStore,
+    keyStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  });
+  assert.equal((await client.resolveTags([tagIds[0]]))[0].attempts[0].attemptId, 'attempt-0');
+  current = 1;
+  assert.equal((await client.resolveTags([tagIds[1]]))[0].attempts[0].attemptId, 'attempt-1');
+});
+
+test('瘦身保存聊天失败时恢复楼层原数据，修复后可重试', async () => {
+  const tagId = crypto.randomUUID();
+  const old = { tagId, prompt: '旧画', ordinal: 0, resultIds: [],
+    attempts: [{ attemptId: 'old', tagId, status: 'failed', promptSnapshot: '旧画' }] };
+  const message = { extra: { stImageAtelier: { tags: [old] } } };
+  let fail = true;
+  const client = createDirectApiClient({
+    compat: { chat: () => [message], save: async () => { if (fail) throw Error('disk full'); }, headers: () => ({}) },
+    extensionSettings: {}, saveSettingsDebounced() {},
+    galleryStore: createMemoryGalleryMetadataStore(),
+    keyStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  });
+  await assert.rejects(client.slimCurrentChat(), /disk full/);
+  assert.deepEqual(message.extra.stImageAtelier.tags[0], old);
+  fail = false;
+  const result = await client.slimCurrentChat();
+  assert.equal(result.changed, true);
+  assert.equal('attempts' in message.extra.stImageAtelier.tags[0], false);
+  assert.equal((await client.resolveTags([tagId]))[0].attempts[0].attemptId, 'old');
 });
 
 for (const [name, patch, parameters, expected] of [

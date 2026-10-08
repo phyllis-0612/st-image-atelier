@@ -3,7 +3,7 @@ import { DirectError, bytesToBase64 } from './openai-direct.js';
 
 export const GALLERY_METADATA_FILE = 'st-image-atelier-gallery.json';
 export const GALLERY_METADATA_URL = `/user/files/${GALLERY_METADATA_FILE}`;
-const DOCUMENT_SCHEMA_VERSION = 1;
+const DOCUMENT_SCHEMA_VERSION = 2;
 
 function clone(value) {
   return typeof structuredClone === 'function'
@@ -40,6 +40,7 @@ function emptyDocument() {
   return {
     schemaVersion: DOCUMENT_SCHEMA_VERSION,
     results: {},
+    attempts: {},
     updatedAt: new Date().toISOString(),
   };
 }
@@ -51,6 +52,8 @@ function normalizeDocument(value) {
     if (!item?.resultId || item.status !== 'available') continue;
     document.results[item.resultId] = normalizeGalleryRecord(item);
   }
+  document.attempts = value?.attempts && typeof value.attempts === 'object' && !Array.isArray(value.attempts)
+    ? clone(value.attempts) : {};
   document.updatedAt = String(value?.updatedAt || document.updatedAt);
   return document;
 }
@@ -106,6 +109,29 @@ export function createGalleryMetadataStore({ readDocument, writeDocument }) {
     values() {
       ready();
       return Object.values(document.results).map(clone);
+    },
+    attemptsForTag(tagId) {
+      ready();
+      return Object.values(document.attempts).filter(item => item?.tagId === tagId).map(clone);
+    },
+    getAttempt(attemptId) {
+      ready();
+      const attempt = document.attempts[attemptId];
+      return attempt ? clone(attempt) : null;
+    },
+    async putAttempts(attempts) {
+      ready();
+      if (!attempts?.length) return;
+      await transaction(next => {
+        for (const attempt of attempts) {
+          if (attempt?.attemptId && attempt?.tagId) next.attempts[attempt.attemptId] = clone(attempt);
+        }
+      });
+    },
+    async removeAttempts(attemptIds) {
+      ready();
+      if (!attemptIds?.some(id => document.attempts[id])) return;
+      await transaction(next => { for (const id of attemptIds) delete next.attempts[id]; });
     },
     get(resultId) {
       ready();

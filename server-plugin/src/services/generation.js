@@ -5,6 +5,7 @@ const { generationWaitMessage } = require('../utils/generation-timeout');
 const adapter = require('../adapters/openai-images');
 const { AppError, publicError } = require('../utils/errors');
 const { assertUuidLike, validatePrompt } = require('../utils/validation');
+const MAX_TAG_RESULTS = 8;
 
 function timestamp() { return new Date().toISOString(); }
 
@@ -181,15 +182,33 @@ class GenerationService {
       attempt.status = 'succeeded';
       attempt.completedAt = timestamp();
       tag.updatedAt = timestamp();
+      let obsoleteIds = [];
       await this.metadata.transaction(index => {
         if (controller.signal.aborted) throw new AppError('ATTEMPT_INTERRUPTED', '用户已取消');
         index.attempts[attempt.attemptId] = attempt;
         const current = index.tags[tag.tagId] || { ...tag, resultIds: [] };
-        current.resultIds = [...new Set([...(current.resultIds || []), ...attempt.resultIds])];
+        const allIds = [...new Set([...(current.resultIds || []), ...attempt.resultIds])];
+        obsoleteIds = allIds.slice(0, -MAX_TAG_RESULTS);
+        current.resultIds = allIds.slice(-MAX_TAG_RESULTS);
         current.latestResultId = attempt.resultIds.at(-1) || current.latestResultId;
         current.updatedAt = timestamp();
         index.tags[tag.tagId] = current;
       });
+      const removed = [];
+      for (const id of obsoleteIds) {
+        const old = this.metadata.getResult(id);
+        try {
+          if (old?.localRelativePath) await this.storage.remove(old.localRelativePath);
+          removed.push(id);
+        } catch (error) {
+          console.warn('[画笺] 历史图片硬删除失败', id, error);
+        }
+      }
+      if (removed.length) {
+        await this.metadata.transaction(index => {
+          for (const id of removed) delete index.results[id];
+        }).catch(error => console.warn('[画笺] 历史图片元数据删除失败', error));
+      }
     } catch (error) {
       for (const resultId of attempt.resultIds) {
         const partial = this.metadata.getResult(resultId);

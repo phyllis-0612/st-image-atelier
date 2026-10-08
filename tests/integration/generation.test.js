@@ -67,6 +67,28 @@ test('服务端换 Key 并行生成，后发请求先完成、旧请求迟到时
   assert.deepEqual(reloaded.getTag(old.tagId).resultIds, tag.resultIds);
 });
 
+test('服务端标签第九张图完成时硬删除最旧的图片与画廊记录', async t => {
+  const f = await fixture(t);
+  const tagId = crypto.randomUUID();
+  const ids = [];
+  let oldestPath;
+  for (let index = 0; index < 9; index++) {
+    const input = request('base64', { tagId });
+    await f.generation.generate(input);
+    const attempt = await waitForAttempt(f.metadata, input.attemptId);
+    ids.push(attempt.resultIds[0]);
+    if (index === 0) oldestPath = f.storage.resolve(f.metadata.getResult(ids[0]).localRelativePath);
+  }
+  assert.deepEqual(f.metadata.getTag(tagId).resultIds, ids.slice(1));
+  for (let index = 0; f.metadata.getResult(ids[0]) && index < 100; index++) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.equal(f.metadata.getResult(ids[0]), null);
+  await assert.rejects(fs.stat(oldestPath), error => error.code === 'ENOENT');
+  assert.equal(f.gallery.metadataList().total, 8);
+  assert.equal((await f.generation.resolveTags([tagId]))[0].results.length, 8);
+});
+
 async function fixture(t) {
   const upstream = await startMockUpstream();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'stia-integration-'));

@@ -1,4 +1,5 @@
 import { parseDrawTags } from '../parser/draw-parser.js';
+import { warnLargeTags } from './tag-footprint.js';
 
 /* 一键删除生图标签：从消息原文里连同 <draw>…</draw> 一起摘掉，不留痕迹。
    - 正文里只删这一个标签的字面范围，前后多余的空行一并收掉，其余一个字不碰。
@@ -64,5 +65,14 @@ export function removeDrawTagFromMessage(message, tagId) {
   } else {
     delete message.extra.stImageAtelier;
   }
+  for (const swipe of message.swipe_info || []) {
+    const copy = swipe?.extra?.stImageAtelier;
+    if (!Array.isArray(copy?.tags)) continue;
+    copy.tags = copy.tags.filter(item => item.tagId !== tagId)
+      .map((item, ordinal) => ({ ...item, ordinal }));
+    if (!copy.tags.length) delete swipe.extra.stImageAtelier;
+    else warnLargeTags(swipe);
+  }
+  warnLargeTags(message);
   return { changed: true, tag, removedMarkup: stripped.removed };
 }

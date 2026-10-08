@@ -26,6 +26,7 @@ import {
   parseArtistPresetImport,
 } from './artist-preset-transfer.js';
 import { normalizeRetentionSettings, selectCleanupCandidates } from '../gallery/retention.js';
+import { compactTag, legacyResult, MAX_TAG_RESULTS, tagBytes, warnLargeTags } from '../state/tag-footprint.js';
 import { normalizeThemeMode } from '../theme/theme.js';
 
 const LEGACY_API_KEY_STORAGE = 'stImageAtelier.directApiKey.v1';
@@ -206,6 +207,8 @@ export function createDirectApiClient({
   const metadataStore = galleryStore || createSillyTavernGalleryMetadataStore(compat);
   const controllers = new Map();
   const resultIndex = new Map();
+  const attemptIndex = new Map();
+  const loadedTagIds = new Set();
   const memoryKeys = new Map();
   let cleanupPromise = null;
   let galleryReadyPromise = null;
@@ -296,6 +299,8 @@ export function createDirectApiClient({
       });
       resultIndex.clear();
       for (const result of metadataStore.values()) resultIndex.set(result.resultId, result);
+      attemptIndex.clear();
+      loadedTagIds.clear();
       for (const key of Object.keys(namespace)) {
         if (!NAMESPACE_KEYS.has(key)) delete namespace[key];
       }
@@ -325,9 +330,44 @@ export function createDirectApiClient({
     return null;
   }
 
+  function loadAttempts(tagId) {
+    if (loadedTagIds.has(tagId)) return;
+    for (const attempt of metadataStore.attemptsForTag(tagId)) {
+      attemptIndex.set(attempt.attemptId, attempt);
+    }
+    loadedTagIds.add(tagId);
+  }
+
+  function removeResultReferences(resultId, tagId) {
+    let changed = false;
+    for (const message of compat.chat()) {
+      for (const variant of [message, ...(message?.swipe_info || [])]) {
+        for (const tag of variant?.extra?.stImageAtelier?.tags || []) {
+          if (tag.tagId !== tagId) continue;
+          const hasResult = (tag.resultIds || []).includes(resultId)
+            || (Array.isArray(tag.results) && tag.results.some(result => result?.resultId === resultId));
+          if (!hasResult) continue;
+          tag.resultIds = (tag.resultIds || []).filter(id => id !== resultId);
+          tag.resultRefs = (Array.isArray(tag.resultRefs) ? tag.resultRefs : [])
+            .filter(ref => ref.resultId !== resultId);
+          if (Array.isArray(tag.results)) {
+            tag.results = tag.results.filter(item => item?.resultId !== resultId);
+            if (!tag.results.length) delete tag.results;
+          }
+          tag.latestResultId = tag.resultIds.at(-1) || null;
+          tag.autoSuppressed = true;
+          changed = true;
+          warnLargeTags(variant);
+        }
+      }
+    }
+    return changed;
+  }
+
   function stateOf(tagId) {
     const found = findTag(tagId);
     if (!found) return { tagId, tag: null, attempts: [], results: [] };
+    loadAttempts(tagId);
     const resultIds = [...new Set(found.tag.resultIds || [])]
       .filter(resultId => resultIndex.has(resultId));
     const results = resultIds.map(resultId => resultIndex.get(resultId));
@@ -339,13 +379,18 @@ export function createDirectApiClient({
       resultIds,
       latestResultId,
       autoAttempted: Boolean(found.tag.autoAttempted
+        || attemptIndex.has(`auto:${tagId}`)
         || found.tag.attempts?.some(attempt => attempt.attemptId === `auto:${tagId}`)),
     };
-    Object.assign(found.tag, tag);
+    const storedAttempts = [...attemptIndex.values()].filter(item => item.tagId === tagId)
+      .map(item => ({ ...item, promptSnapshot: item.promptSnapshot ?? found.tag.prompt }));
+    const attempts = [...storedAttempts, ...(found.tag.attempts || [])
+      .filter(item => !attemptIndex.has(item.attemptId))]
+      .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
     return {
       tagId,
-      tag: clone(tag),
-      attempts: clone(found.tag.attempts || []),
+      tag: clone(compactTag(tag)),
+      attempts: clone(attempts),
       results: clone(results),
     };
   }
@@ -353,16 +398,28 @@ export function createDirectApiClient({
   async function persistAttempt(fallbackFound, attempt) {
     const found = findTag(attempt.tagId) || fallbackFound;
     if (!found) throw new DirectError('VALIDATION_FAILED', '找不到对应的生图标签');
-    found.tag.attempts ??= [];
-    const index = found.tag.attempts.findIndex(item => item.attemptId === attempt.attemptId);
-    if (index >= 0) found.tag.attempts[index] = clone(attempt);
-    else found.tag.attempts.unshift(clone(attempt));
-    const active = found.tag.attempts.filter(item => ACTIVE_STATUSES.has(item.status));
-    const history = found.tag.attempts.filter(item => !ACTIVE_STATUSES.has(item.status)).slice(0, 50);
-    const retained = new Set([...active, ...history].map(item => item.attemptId));
-    found.tag.attempts = found.tag.attempts.filter(item => retained.has(item.attemptId));
-    if (attempt.requestMode === 'auto') found.tag.autoAttempted = true;
-    await compat.save();
+    loadAttempts(attempt.tagId);
+    const stored = clone(attempt);
+    if (stored.promptSnapshot === found.tag.prompt) delete stored.promptSnapshot;
+    await metadataStore.putAttempts([stored]);
+    attemptIndex.set(attempt.attemptId, clone(attempt));
+    const history = [...attemptIndex.values()]
+      .filter(item => item.tagId === attempt.tagId && !ACTIVE_STATUSES.has(item.status))
+      .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+    const stale = history.slice(24).map(item => item.attemptId);
+    if (stale.length) {
+      await metadataStore.removeAttempts(stale);
+      for (const id of stale) attemptIndex.delete(id);
+    }
+    const nextStatus = attempt.status === 'generating' || TERMINAL_STATUSES.has(attempt.status)
+      ? attempt.status : found.tag.status;
+    if (nextStatus !== found.tag.status
+      || (attempt.requestMode === 'auto' && !found.tag.autoAttempted)) {
+      found.tag.status = nextStatus;
+      if (attempt.requestMode === 'auto') found.tag.autoAttempted = true;
+      warnLargeTags(found.message);
+      await compat.save();
+    }
     return found;
   }
 
@@ -470,7 +527,7 @@ export function createDirectApiClient({
   }
 
   async function removeFile(result) {
-    if (!result?.localRelativePath) return;
+    if (!result?.localRelativePath || result.storageMode === 'server') return;
     try {
       await requestSt('/api/images/delete', { path: result.localRelativePath });
     } catch (error) {
@@ -481,35 +538,35 @@ export function createDirectApiClient({
   async function resolveTags(tagIds) {
     await ensureGalleryReady();
     const values = [];
-    let changed = false;
+    let interrupted = false;
     for (const tagId of tagIds) {
       const found = findTag(tagId);
       if (found) {
-        for (const attempt of found.tag.attempts || []) {
+        loadAttempts(tagId);
+        for (const attempt of [...attemptIndex.values()].filter(item => item.tagId === tagId)) {
           if (ACTIVE_STATUSES.has(attempt.status) && !controllers.has(attempt.attemptId)) {
             attempt.status = 'interrupted';
             attempt.errorCode = 'ATTEMPT_INTERRUPTED';
             attempt.errorMessage = '生成被中断，请手动重试';
             attempt.completedAt = now();
-            changed = true;
+            await metadataStore.putAttempts([attempt]);
+            found.tag.status = 'interrupted';
+            interrupted = true;
           }
-        }
-        if (Object.hasOwn(found.tag, 'results')) {
-          delete found.tag.results;
-          changed = true;
         }
         const availableIds = [...new Set(found.tag.resultIds || [])]
           .filter(resultId => resultIndex.has(resultId));
-        if (JSON.stringify(availableIds) !== JSON.stringify(found.tag.resultIds || [])) changed = true;
         found.tag.resultIds = availableIds;
         if (!availableIds.includes(found.tag.latestResultId)) {
           found.tag.latestResultId = availableIds.at(-1) || null;
-          changed = true;
         }
       }
       values.push(stateOf(tagId));
     }
-    if (changed) await compat.save();
+    if (interrupted) {
+      console.warn('[画笺] 检测到中断的生成任务，任务详情已更新到独立存储');
+      await compat.save();
+    }
     return values;
   }
 
@@ -534,8 +591,10 @@ export function createDirectApiClient({
     await ensureGalleryReady();
     let found = findTag(input.tagId);
     if (!found) throw new DirectError('VALIDATION_FAILED', '找不到对应的生图标签');
-    const existing = found.tag.attempts?.find(item => item.attemptId === input.attemptId);
-    if (existing) return clone(existing);
+    loadAttempts(input.tagId);
+    const existing = attemptIndex.get(input.attemptId)
+      || found.tag.attempts?.find(item => item.attemptId === input.attemptId);
+    if (existing) return clone({ ...existing, promptSnapshot: existing.promptSnapshot ?? found.tag.prompt });
 
     const requestedSize = provider === 'novelai'
       ? (novelAi.ratioMap?.[input.parameters?.ratio] || novelAi.defaultSize)
@@ -648,17 +707,35 @@ export function createDirectApiClient({
       const normalizedSaved = await metadataStore.putMany(saved);
       saved.splice(0, saved.length, ...normalizedSaved);
       found = findTag(input.tagId) || found;
-      delete found.tag.results;
-      found.tag.resultIds = [...new Set([
+      for (const result of saved) resultIndex.set(result.resultId, result);
+      const allIds = [...new Set([
         ...(found.tag.resultIds || []).filter(resultId => resultIndex.has(resultId)),
         ...saved.map(result => result.resultId),
       ])];
+      const expired = allIds.slice(0, -MAX_TAG_RESULTS);
+      found.tag.resultIds = allIds.slice(-MAX_TAG_RESULTS);
+      found.tag.resultRefs = found.tag.resultIds.map(id => {
+        const result = resultIndex.get(id);
+        return { resultId: id, localRelativePath: result.localRelativePath, createdAt: result.createdAt };
+      });
+      found.tag.status = 'succeeded';
       found.tag.latestResultId = saved.at(-1)?.resultId || found.tag.latestResultId || null;
-      for (const result of saved) resultIndex.set(result.resultId, result);
+      Object.assign(found.tag, compactTag(found.tag));
+      warnLargeTags(found.message);
+      await compat.save();
       attempt.status = 'succeeded';
       attempt.resultIds = saved.map(result => result.resultId);
       attempt.completedAt = now();
       found = await persistAttempt(found, attempt);
+      for (const id of expired) {
+        try {
+          await removeFile(resultIndex.get(id));
+          await metadataStore.remove(id);
+          resultIndex.delete(id);
+        } catch (error) {
+          console.warn('[画笺] 历史图片硬删除失败', id, error);
+        }
+      }
       return clone(attempt);
     } catch (error) {
       await Promise.allSettled(saved.map(removeFile));
@@ -670,6 +747,8 @@ export function createDirectApiClient({
         if (discarded.has(found.tag.latestResultId)) {
           found.tag.latestResultId = found.tag.resultIds.at(-1) || null;
         }
+        found.tag.resultRefs = (found.tag.resultRefs || [])
+          .filter(ref => !discarded.has(ref.resultId));
       }
       const cancelled = controller.signal.aborted;
       attempt.status = cancelled ? 'cancelled' : 'failed';
@@ -689,18 +768,128 @@ export function createDirectApiClient({
 
   async function cancel(attemptId) {
     controllers.get(attemptId)?.abort(new Error('cancelled'));
-    for (const message of compat.chat()) {
-      for (const tag of message?.extra?.stImageAtelier?.tags || []) {
-        const attempt = tag.attempts?.find(item => item.attemptId === attemptId);
-        if (!attempt || TERMINAL_STATUSES.has(attempt.status)) continue;
-        attempt.status = 'cancelled';
-        attempt.errorMessage = '已取消';
-        attempt.completedAt = now();
-        await compat.save();
-        return clone(attempt);
+    await ensureGalleryReady();
+    const attempt = attemptIndex.get(attemptId) || metadataStore.getAttempt(attemptId);
+    if (!attempt || TERMINAL_STATUSES.has(attempt.status)) return null;
+    attempt.status = 'cancelled';
+    attempt.errorMessage = '已取消';
+    attempt.completedAt = now();
+    await metadataStore.putAttempts([attempt]);
+    attemptIndex.set(attemptId, clone(attempt));
+    return clone(attempt);
+  }
+
+  async function slimCurrentChat() {
+    await ensureGalleryReady();
+    const chat = compat.chat();
+    const beforeBytes = tagBytes(chat);
+    console.info('[画笺] 当前聊天 tags 瘦身前', { bytes: beforeBytes });
+    const targets = [];
+    const importedResults = new Map();
+    const importedAttempts = new Map();
+    for (const message of chat) {
+      for (const variant of [message, ...(Array.isArray(message?.swipe_info) ? message.swipe_info : [])]) {
+        const metadata = variant?.extra?.stImageAtelier;
+        if (!Array.isArray(metadata?.tags)) continue;
+        targets.push(metadata);
+        for (const tag of metadata.tags) {
+          loadAttempts(tag.tagId);
+          for (const entry of [...(Array.isArray(tag.results) ? tag.results : []),
+            ...(Array.isArray(tag.history) ? tag.history : [])]) {
+            const result = legacyResult(tag, entry);
+            if (result && result.storageMode !== 'server' && !resultIndex.has(result.resultId)) {
+              importedResults.set(result.resultId, result);
+            }
+          }
+          for (const ref of Array.isArray(tag.resultRefs) ? tag.resultRefs : []) {
+            if (resultIndex.has(ref.resultId) || importedResults.has(ref.resultId)) continue;
+            const result = legacyResult(tag, ref);
+            if (result && result.storageMode !== 'server') importedResults.set(result.resultId, result);
+          }
+          for (const attempt of Array.isArray(tag.attempts) ? tag.attempts : []) {
+            if (attempt?.attemptId && !attemptIndex.has(attempt.attemptId)) {
+              importedAttempts.set(attempt.attemptId, {
+                attemptId: attempt.attemptId,
+                tagId: tag.tagId,
+                requestMode: attempt.requestMode,
+                provider: attempt.provider,
+                presetId: attempt.presetId,
+                presetNameSnapshot: attempt.presetNameSnapshot,
+                model: attempt.model,
+                ...(attempt.promptSnapshot && attempt.promptSnapshot !== tag.prompt
+                  ? { promptSnapshot: String(attempt.promptSnapshot) } : {}),
+                negativePromptSnapshot: String(attempt.negativePromptSnapshot || ''),
+                parameters: {
+                  ratio: attempt.parameters?.ratio,
+                  size: attempt.parameters?.size,
+                  quality: attempt.parameters?.quality,
+                  count: attempt.parameters?.count,
+                },
+                status: attempt.status,
+                resultIds: Array.isArray(attempt.resultIds) ? attempt.resultIds.slice(0, MAX_TAG_RESULTS) : [],
+                errorCode: attempt.errorCode,
+                errorMessage: attempt.errorMessage,
+                statusMessage: attempt.statusMessage,
+                createdAt: attempt.createdAt,
+                completedAt: attempt.completedAt,
+                schemaVersion: SCHEMA_VERSION,
+              });
+            }
+          }
+        }
       }
     }
-    return null;
+    // Commit the independent file first; the chat remains intact if this write fails.
+    if (importedResults.size) {
+      const stored = await metadataStore.putMany([...importedResults.values()]);
+      for (const result of stored) resultIndex.set(result.resultId, result);
+    }
+    if (importedAttempts.size) {
+      await metadataStore.putAttempts([...importedAttempts.values()]);
+      for (const attempt of importedAttempts.values()) attemptIndex.set(attempt.attemptId, attempt);
+    }
+
+    const originals = targets.map(metadata => clone(metadata.tags));
+    let changed = false;
+    let unresolved = 0;
+    for (const metadata of targets) {
+      metadata.tags = metadata.tags.map(tag => {
+        const ids = [...new Set([
+          ...(Array.isArray(tag.resultIds) ? tag.resultIds : []),
+          ...(Array.isArray(tag.results) ? tag.results.map(result => result?.resultId) : []),
+          ...(Array.isArray(tag.resultRefs) ? tag.resultRefs.map(ref => ref?.resultId) : []),
+        ].filter(Boolean))].slice(-MAX_TAG_RESULTS);
+        const resultRefs = ids.map(id => {
+            const result = resultIndex.get(id) || (Array.isArray(tag.resultRefs)
+              ? tag.resultRefs.find(ref => ref.resultId === id) : null)
+              || (Array.isArray(tag.results) ? tag.results.find(item => item.resultId === id) : null);
+          if (!result?.localRelativePath) {
+            unresolved += 1;
+            return null;
+          }
+          return { resultId: id, localRelativePath: result.localRelativePath,
+            createdAt: result.createdAt };
+        }).filter(Boolean);
+        const compact = compactTag({ ...tag, resultIds: ids, resultRefs });
+        if (JSON.stringify(compact) !== JSON.stringify(tag)) changed = true;
+        return compact;
+      });
+    }
+    try {
+      if (changed) await compat.save();
+    } catch (error) {
+      targets.forEach((metadata, index) => { metadata.tags = originals[index]; });
+      throw error;
+    }
+    const afterBytes = tagBytes(chat);
+    console.info('[画笺] 当前聊天 tags 瘦身后', { bytes: afterBytes, changed,
+      importedResults: importedResults.size, importedAttempts: importedAttempts.size, unresolved });
+    for (const message of chat) {
+      warnLargeTags(message);
+      for (const variant of message?.swipe_info || []) warnLargeTags(variant);
+    }
+    return { beforeBytes, afterBytes, changed, importedResults: importedResults.size,
+      importedAttempts: importedAttempts.size, unresolved };
   }
 
   async function gallery({ cursor, limit = 30 } = {}) {
@@ -745,14 +934,7 @@ export function createDirectApiClient({
     await removeFile(result);
     await metadataStore.remove(resultId);
     resultIndex.delete(resultId);
-    const found = findTag(result.tagId);
-    if (found) {
-      delete found.tag.results;
-      found.tag.resultIds = (found.tag.resultIds || []).filter(id => id !== resultId);
-      found.tag.latestResultId = found.tag.resultIds.at(-1) || null;
-      found.tag.autoSuppressed = true;
-      await compat.save();
-    }
+    if (removeResultReferences(resultId, result.tagId)) await compat.save();
     return { resultId, status: 'deleted' };
   }
 
@@ -791,14 +973,7 @@ export function createDirectApiClient({
     let chatChanged = false;
     const deleted = new Set(deletedIds);
     for (const tagId of affectedTags) {
-      const found = findTag(tagId);
-      if (!found) continue;
-      delete found.tag.results;
-      found.tag.resultIds = (found.tag.resultIds || [])
-        .filter(resultId => !deleted.has(resultId));
-      found.tag.latestResultId = found.tag.resultIds.at(-1) || null;
-      found.tag.autoSuppressed = true;
-      chatChanged = true;
+      for (const id of deleted) chatChanged = removeResultReferences(id, tagId) || chatChanged;
     }
     if (chatChanged) await compat.save();
 
@@ -1074,8 +1249,17 @@ export function createDirectApiClient({
       return { ok: true, modelCount: models.length };
     },
     resolveTags,
+    slimCurrentChat,
     generate,
     attempt: async attemptId => {
+      await ensureGalleryReady();
+      const fromStore = metadataStore.getAttempt(attemptId);
+      if (fromStore && !attemptIndex.has(attemptId)) attemptIndex.set(attemptId, fromStore);
+      if (attemptIndex.has(attemptId)) {
+        const attempt = clone(attemptIndex.get(attemptId));
+        attempt.promptSnapshot ??= findTag(attempt.tagId)?.tag.prompt || '';
+        return attempt;
+      }
       for (const message of compat.chat()) {
         for (const tag of message?.extra?.stImageAtelier?.tags || []) {
           const attempt = tag.attempts?.find(item => item.attemptId === attemptId);
@@ -1092,6 +1276,7 @@ export function createDirectApiClient({
     setFavorite,
     fileUrl,
     downloadUrl: fileUrl,
-    hasResult: resultId => resultIndex.has(resultId),
+    hasResult: resultId => resultIndex.has(resultId)
+      && resultIndex.get(resultId)?.storageMode !== 'server',
   };
 }

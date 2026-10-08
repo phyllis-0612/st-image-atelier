@@ -1,3 +1,5 @@
+import { compactTag, warnLargeTags } from './tag-footprint.js';
+
 function createUuid() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, character => {
@@ -22,7 +24,7 @@ export function reconcileTagMetadata(message, parsedTags, uuid = createUuid) {
     }
     const saved = matchedIndex >= 0 ? previousTags[matchedIndex] : null;
     if (matchedIndex >= 0) unused.delete(matchedIndex);
-    return {
+    const record = {
       tagId: saved?.tagId || uuid(),
       prompt: tag.prompt,
       ordinal,
@@ -31,11 +33,16 @@ export function reconcileTagMetadata(message, parsedTags, uuid = createUuid) {
       count: tag.count,
       latestResultId: saved?.latestResultId || null,
       resultIds: Array.isArray(saved?.resultIds) ? saved.resultIds : [],
-      attempts: Array.isArray(saved?.attempts) ? saved.attempts : [],
-      results: Array.isArray(saved?.results) ? saved.results : [],
+      resultRefs: Array.isArray(saved?.resultRefs) ? saved.resultRefs : [],
+      status: saved?.status || 'idle',
       autoAttempted: Boolean(saved?.autoAttempted),
       autoSuppressed: Boolean(saved?.autoSuppressed),
     };
+    const compact = compactTag(record);
+    // Unknown legacy fields may hold image metadata. Do not discard them before the
+    // explicit migration has copied known image paths into the gallery file.
+    return saved && Object.keys(saved).some(key => !Object.hasOwn(compact, key))
+      ? { ...saved, ...record } : compact;
   });
 
   const metadata = {
@@ -44,6 +51,7 @@ export function reconcileTagMetadata(message, parsedTags, uuid = createUuid) {
     schemaVersion: 2,
   };
   message.extra.stImageAtelier = metadata;
+  warnLargeTags(message);
   return {
     metadata,
     changed: JSON.stringify(previous) !== JSON.stringify(metadata),

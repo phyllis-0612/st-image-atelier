@@ -1225,6 +1225,18 @@ export function createToolPanel({ api, store }) {
     });
   }, true);
   saveMaintenance.classList.add('stia-button--full');
+  const slimChat = action('瘦身当前聊天', async () => {
+    await run(slimChat, async () => {
+      const result = await api.slimCurrentChat();
+      status.textContent = result.changed
+        ? `已瘦身：tags ${(result.beforeBytes / 1024 / 1024).toFixed(2)} MB → ${(result.afterBytes / 1024 / 1024).toFixed(2)} MB；旧图资料已转存${result.unresolved ? `，${result.unresolved} 条旧引用缺少本地路径，请查看控制台` : ''}`
+        : '当前聊天已经瘦身，无需重复处理';
+    });
+  });
+  slimChat.classList.add('stia-button--full');
+  const slimHint = document.createElement('small');
+  slimHint.className = 'stia-muted';
+  slimHint.textContent = '把本聊天楼层和滑动分支中的旧生图记录转入独立画廊文件，只保留轻量引用；完成后只保存一次聊天。可重复执行。';
   appearanceSection.append(
     appearanceTitle,
     themeField,
@@ -1232,6 +1244,8 @@ export function createToolPanel({ api, store }) {
     retentionGrid,
     cleanupNotice,
     saveMaintenance,
+    slimChat,
+    slimHint,
   );
 
   const warning = document.createElement('p');
