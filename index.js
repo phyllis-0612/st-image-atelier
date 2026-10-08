@@ -130,7 +130,7 @@ function installToolButton() {
 }
 
 function initialize() {
-  panel = createToolPanel({ api, store });
+  panel = createToolPanel({ api, store, notify: (level, message, title) => compat.notify(level, message, title) });
   promptOverrideDialog = createPromptOverrideDialog();
   installToolButton();
   events.bind();

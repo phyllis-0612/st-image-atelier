@@ -95,7 +95,7 @@ function downloadJson(filename, value) {
   setTimeout(() => URL.revokeObjectURL(href), 0);
 }
 
-export function createToolPanel({ api, store }) {
+export function createToolPanel({ api, store, notify }) {
   const overlay = document.createElement('div');
   overlay.className = 'stia-overlay';
   overlay.hidden = true;
@@ -1225,12 +1225,45 @@ export function createToolPanel({ api, store }) {
     });
   }, true);
   saveMaintenance.classList.add('stia-button--full');
+  const sizeLabel = bytes => bytes >= 1024 * 1024
+    ? `${(bytes / 1024 / 1024).toFixed(2)} MB`
+    : `${(bytes / 1024).toFixed(1)} KB`;
+  const slimFeedback = document.createElement('p');
+  slimFeedback.className = 'stia-status';
+  slimFeedback.setAttribute('role', 'status');
+  slimFeedback.setAttribute('aria-live', 'polite');
   const slimChat = action('瘦身当前聊天', async () => {
     await run(slimChat, async () => {
-      const result = await api.slimCurrentChat();
-      status.textContent = result.changed
-        ? `已瘦身：tags ${(result.beforeBytes / 1024 / 1024).toFixed(2)} MB → ${(result.afterBytes / 1024 / 1024).toFixed(2)} MB；旧图资料已转存${result.unresolved ? `，${result.unresolved} 条旧引用缺少本地路径，请查看控制台` : ''}`
-        : '当前聊天已经瘦身，无需重复处理';
+      slimChat.textContent = '瘦身中…';
+      slimFeedback.className = 'stia-status stia-progress';
+      slimFeedback.textContent = '正在读取当前聊天，请稍候…';
+      // Give the browser a chance to show progress before scanning a large chat.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      try {
+        const result = await api.slimCurrentChat(({ stage, beforeBytes, afterBytes }) => {
+          slimFeedback.textContent = {
+            loading: '正在读取画廊资料…',
+            scanning: `正在检查聊天标签（原有 ${sizeLabel(beforeBytes)}）…`,
+            storing: `正在转存旧图与任务资料（原有 ${sizeLabel(beforeBytes)}）…`,
+            saving: `正在保存聊天：${sizeLabel(beforeBytes)} → ${sizeLabel(afterBytes)}…`,
+          }[stage] || '正在瘦身…';
+        });
+        const summary = result.changed
+          ? `瘦身完成：tags ${sizeLabel(result.beforeBytes)} → ${sizeLabel(result.afterBytes)}。${result.unresolved ? `有 ${result.unresolved} 条旧引用缺少图片路径，详情见控制台。` : '旧图片资料已转存。'}`
+          : `当前聊天已经瘦身：tags ${sizeLabel(result.afterBytes)}，无需重复处理。`;
+        slimFeedback.className = 'stia-status';
+        slimFeedback.textContent = summary;
+        status.textContent = summary;
+        notify?.(result.unresolved ? 'warning' : 'success', summary, '画笺 · 聊天瘦身');
+      } catch (error) {
+        const message = `瘦身失败：${error?.message || '未知错误'}`;
+        slimFeedback.className = 'stia-status stia-error';
+        slimFeedback.textContent = message;
+        notify?.('error', message, '画笺 · 聊天瘦身');
+        throw error;
+      } finally {
+        slimChat.textContent = '瘦身当前聊天';
+      }
     });
   });
   slimChat.classList.add('stia-button--full');
@@ -1245,6 +1278,7 @@ export function createToolPanel({ api, store }) {
     cleanupNotice,
     saveMaintenance,
     slimChat,
+    slimFeedback,
     slimHint,
   );
 

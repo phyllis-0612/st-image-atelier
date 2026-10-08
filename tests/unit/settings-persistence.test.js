@@ -98,7 +98,8 @@ test('总开关即时持久化，独立保存生图参数后立即更新当前�
     fileUrl: id => `/images/${id}`,
   };
   const store = createStore();
-  const panel = createToolPanel({ api, store });
+  const notifications = [];
+  const panel = createToolPanel({ api, store, notify: (...args) => notifications.push(args) });
   panel.show();
 
   await waitFor(() => store.state.preset?.id === 'default', '设置面板未完成初始化');
@@ -190,4 +191,27 @@ test('总开关即时持久化，独立保存生图参数后立即更新当前�
   assert.equal(legacyQuality.hidden, false);
   assert.equal(v5Quality.hidden, true);
   assert.equal(v5Uc.hidden, true);
+
+  let finishSlim;
+  api.slimCurrentChat = onProgress => {
+    onProgress({ stage: 'saving', beforeBytes: 19_515_132, afterBytes: 743_652 });
+    return new Promise(resolve => { finishSlim = resolve; });
+  };
+  const slimButton = [...document.querySelectorAll('button')]
+    .find(button => button.textContent.includes('瘦身当前聊天'));
+  const feedback = document.querySelector('[role="status"][aria-live="polite"]');
+  slimButton.click();
+  await waitFor(() => Boolean(finishSlim), '瘦身按钮没有开始执行');
+  assert.equal(slimButton.disabled, true);
+  assert.match(feedback.textContent, /正在保存聊天.*18\.61 MB.*726\.2 KB/);
+  finishSlim({ beforeBytes: 19_515_132, afterBytes: 743_652, changed: true, unresolved: 0 });
+  await waitFor(() => !slimButton.disabled, '瘦身完成后按钮没有恢复');
+  assert.match(feedback.textContent, /瘦身完成.*18\.61 MB.*726\.2 KB/);
+  assert.equal(notifications.at(-1)[0], 'success');
+
+  api.slimCurrentChat = async () => { throw new Error('磁盘空间不足'); };
+  slimButton.click();
+  await waitFor(() => !slimButton.disabled && feedback.classList.contains('stia-error'), '失败没有显示在按钮旁');
+  assert.match(feedback.textContent, /磁盘空间不足/);
+  assert.equal(notifications.at(-1)[0], 'error');
 });

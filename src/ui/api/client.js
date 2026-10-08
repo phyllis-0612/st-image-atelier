@@ -162,7 +162,7 @@ export function createApiClient({
     listModels: presetId => selected().listModels(presetId),
     testPreset: presetId => selected().testPreset(presetId),
     resolveTags: tagIds => selected().resolveTags(tagIds),
-    slimCurrentChat: () => direct.slimCurrentChat(),
+    slimCurrentChat: onProgress => direct.slimCurrentChat(onProgress),
     generate: input => input.provider === 'novelai'
       ? direct.generate(input)
       : selected().generate(input),

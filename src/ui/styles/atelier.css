@@ -592,6 +592,10 @@
   content: "✓ ";
 }
 
+.stia-status.stia-progress::before {
+  content: "◌ ";
+}
+
 .stia-status.stia-error {
   color: var(--stia-danger);
   background: var(--stia-danger-muted);

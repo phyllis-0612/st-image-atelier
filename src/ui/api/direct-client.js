@@ -779,11 +779,13 @@ export function createDirectApiClient({
     return clone(attempt);
   }
 
-  async function slimCurrentChat() {
+  async function slimCurrentChat(onProgress = () => {}) {
+    onProgress({ stage: 'loading' });
     await ensureGalleryReady();
     const chat = compat.chat();
     const beforeBytes = tagBytes(chat);
     console.info('[画笺] 当前聊天 tags 瘦身前', { bytes: beforeBytes });
+    onProgress({ stage: 'scanning', beforeBytes });
     const targets = [];
     const importedResults = new Map();
     const importedAttempts = new Map();
@@ -840,6 +842,8 @@ export function createDirectApiClient({
       }
     }
     // Commit the independent file first; the chat remains intact if this write fails.
+    onProgress({ stage: 'storing', beforeBytes,
+      importedResults: importedResults.size, importedAttempts: importedAttempts.size });
     if (importedResults.size) {
       const stored = await metadataStore.putMany([...importedResults.values()]);
       for (const result of stored) resultIndex.set(result.resultId, result);
@@ -876,7 +880,10 @@ export function createDirectApiClient({
       });
     }
     try {
-      if (changed) await compat.save();
+      if (changed) {
+        onProgress({ stage: 'saving', beforeBytes, afterBytes: tagBytes(chat) });
+        await compat.save();
+      }
     } catch (error) {
       targets.forEach((metadata, index) => { metadata.tags = originals[index]; });
       throw error;
