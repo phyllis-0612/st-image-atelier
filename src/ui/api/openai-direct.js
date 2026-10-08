@@ -344,3 +344,23 @@ export function base64ToBytes(value) {
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
   return bytes;
 }
+
+// The SillyTavern upload endpoint already accepts Base64. Inspect only the
+// header instead of decoding and encoding an entire upstream image again.
+export function inspectBase64Image(value) {
+  const raw = String(value).replace(/^data:[^;,]+;base64,/i, '').trim();
+  const base64 = /\s/.test(raw) ? raw.replace(/\s+/g, '') : raw;
+  if (base64.length < 16 || base64.length % 4 !== 0
+    || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) return null;
+  let header;
+  try {
+    const decoded = atob(base64.slice(0, 24));
+    header = Uint8Array.from(decoded, character => character.charCodeAt(0));
+  } catch {
+    return null;
+  }
+  const type = detectImageType(header);
+  if (!type) return null;
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return { base64, type, byteSize: (base64.length / 4) * 3 - padding };
+}

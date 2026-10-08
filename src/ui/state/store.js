@@ -15,8 +15,8 @@ export function createStore() {
     serviceError: null,
   };
 
-  function emit() {
-    for (const listener of listeners) listener(state);
+  function emit(change) {
+    for (const listener of listeners) listener(state, change);
   }
 
   return {
@@ -31,11 +31,11 @@ export function createStore() {
     },
     setTag(tagId, value) {
       state.tagStates.set(tagId, value);
-      emit();
+      emit({ type: 'tag', tagId });
     },
     removeTag(tagId) {
       if (!state.tagStates.delete(tagId)) return;
-      emit();
+      emit({ type: 'tag', tagId });
     },
   };
 }

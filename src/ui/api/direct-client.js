@@ -10,10 +10,10 @@ import {
 } from '../../shared/constants.js';
 import {
   DirectError,
-  base64ToBytes,
   bytesToBase64,
   detectImageType,
   generateImages,
+  inspectBase64Image,
   listModelsDirect,
 } from './openai-direct.js';
 import { generateNovelAiImages } from './novelai-direct.js';
@@ -395,13 +395,25 @@ export function createDirectApiClient({
     };
   }
 
-  async function persistAttempt(fallbackFound, attempt) {
+  async function saveChatSoon() {
+    if (typeof compat.saveSoon === 'function') await compat.saveSoon();
+    else await compat.save();
+  }
+
+  async function persistAttempt(fallbackFound, attempt, { defer = false, alreadyStored = false } = {}) {
     const found = findTag(attempt.tagId) || fallbackFound;
     if (!found) throw new DirectError('VALIDATION_FAILED', '找不到对应的生图标签');
     loadAttempts(attempt.tagId);
     const stored = clone(attempt);
     if (stored.promptSnapshot === found.tag.prompt) delete stored.promptSnapshot;
-    await metadataStore.putAttempts([stored]);
+    if (!alreadyStored) {
+      if (defer) {
+        void metadataStore.putAttempts([stored], { deferred: true })
+          .catch(error => console.warn('[画笺] 暂存生成进度失败', error));
+      } else {
+        await metadataStore.putAttempts([stored]);
+      }
+    }
     attemptIndex.set(attempt.attemptId, clone(attempt));
     const history = [...attemptIndex.values()]
       .filter(item => item.tagId === attempt.tagId && !ACTIVE_STATUSES.has(item.status))
@@ -418,7 +430,7 @@ export function createDirectApiClient({
       found.tag.status = nextStatus;
       if (attempt.requestMode === 'auto') found.tag.autoAttempted = true;
       warnLargeTags(found.message);
-      await compat.save();
+      await saveChatSoon();
     }
     return found;
   }
@@ -438,13 +450,7 @@ export function createDirectApiClient({
   }
 
   async function bytesFromSource(source, signal) {
-    if (source.sourceType === 'base64') {
-      try {
-        return base64ToBytes(source.value);
-      } catch (error) {
-        throw new DirectError('UPSTREAM_RESPONSE_INVALID', error?.message || 'Base64 解码失败');
-      }
-    }
+    if (source.sourceType === 'bytes' && source.value instanceof Uint8Array) return source.value;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error('timeout')), namespace.settings.downloadTimeoutMs);
     const abort = () => controller.abort(signal.reason);
@@ -480,15 +486,29 @@ export function createDirectApiClient({
   }
 
   async function saveSource(source, input, attempt, signal) {
-    const bytes = await bytesFromSource(source, signal);
-    if (bytes.byteLength > namespace.settings.maxImageBytes) {
+    let image;
+    let type;
+    let byteSize;
+    let bytes;
+    if (source.sourceType === 'base64') {
+      const inspected = inspectBase64Image(source.value);
+      if (!inspected) throw new DirectError('UPSTREAM_RESPONSE_INVALID', '仅支持 PNG、JPEG、WebP 图片数据');
+      image = inspected.base64;
+      type = inspected.type;
+      byteSize = inspected.byteSize;
+    } else {
+      bytes = await bytesFromSource(source, signal);
+      type = detectImageType(bytes);
+      byteSize = bytes.byteLength;
+    }
+    if (byteSize > namespace.settings.maxImageBytes) {
       throw new DirectError('IMAGE_DOWNLOAD_FAILED', '图片超过 30 MB');
     }
-    const type = detectImageType(bytes);
     if (!type) throw new DirectError('UPSTREAM_RESPONSE_INVALID', '仅支持 PNG、JPEG、WebP');
+    if (source.sourceType !== 'base64') image = bytesToBase64(bytes);
     const resultId = uuid();
     const uploaded = await requestSt('/api/images/upload', {
-      image: bytesToBase64(bytes),
+      image,
       format: type.extension,
       ch_name: 'st-image-atelier',
       filename: resultId,
@@ -514,8 +534,8 @@ export function createDirectApiClient({
       parameters: { size: attempt.parameters?.size ?? null, quality: attempt.parameters?.quality ?? null },
       localRelativePath: uploaded.path,
       mimeType: type.mimeType,
-      byteSize: bytes.byteLength,
-      sourceType: source.sourceType,
+      byteSize,
+      sourceType: source.sourceType === 'bytes' ? 'base64' : source.sourceType,
       status: 'available',
       storageMode: 'direct',
       generationDurationMs: Math.max(0, Date.now() - Date.parse(attempt.createdAt)),
@@ -565,7 +585,7 @@ export function createDirectApiClient({
     }
     if (interrupted) {
       console.warn('[画笺] 检测到中断的生成任务，任务详情已更新到独立存储');
-      await compat.save();
+      await saveChatSoon();
     }
     return values;
   }
@@ -645,14 +665,14 @@ export function createDirectApiClient({
       const onTimeout = async timeoutMs => {
         if (attempt.status !== 'generating' || controller.signal.aborted) return;
         attempt.statusMessage = generationWaitMessage(timeoutMs);
-        found = await persistAttempt(found, attempt);
+        found = await persistAttempt(found, attempt, { defer: true });
         if (attempt.status === 'generating' && !controller.signal.aborted) input.onProgress?.(clone(attempt));
       };
       const onRetry = async retry => {
         attempt.retryCount = retry.retryCount;
         attempt.retryNotice = retry;
         attempt.statusMessage = retry.message;
-        found = await persistAttempt(found, attempt);
+        found = await persistAttempt(found, attempt, { defer: true });
         input.onProgress?.(clone(attempt));
       };
       if (provider === 'novelai') {
@@ -687,7 +707,7 @@ export function createDirectApiClient({
           onCompatibilityRetry: async retry => {
             attempt.compatibilityRetry = retry;
             attempt.statusMessage = retry.message;
-            found = await persistAttempt(found, attempt);
+            found = await persistAttempt(found, attempt, { defer: true });
             input.onProgress?.(clone(attempt));
           },
           onRequestParameters: parameters => Object.assign(attempt.parameters, parameters),
@@ -696,15 +716,20 @@ export function createDirectApiClient({
 
       attempt.status = 'downloading';
       attempt.statusMessage = null;
-      found = await persistAttempt(found, attempt);
+      found = await persistAttempt(found, attempt, { defer: true });
       for (const source of sources) {
         if (controller.signal.aborted) throw controller.signal.reason || new Error('cancelled');
         saved.push(await saveSource(source, input, attempt, controller.signal));
       }
 
       attempt.status = 'saving';
-      found = await persistAttempt(found, attempt);
-      const normalizedSaved = await metadataStore.putMany(saved);
+      found = await persistAttempt(found, attempt, { defer: true });
+      attempt.status = 'succeeded';
+      attempt.resultIds = saved.map(result => result.resultId);
+      attempt.completedAt = now();
+      const stored = clone(attempt);
+      if (stored.promptSnapshot === found.tag.prompt) delete stored.promptSnapshot;
+      const normalizedSaved = await metadataStore.putGeneration(saved, stored);
       saved.splice(0, saved.length, ...normalizedSaved);
       found = findTag(input.tagId) || found;
       for (const result of saved) resultIndex.set(result.resultId, result);
@@ -718,15 +743,10 @@ export function createDirectApiClient({
         const result = resultIndex.get(id);
         return { resultId: id, localRelativePath: result.localRelativePath, createdAt: result.createdAt };
       });
-      found.tag.status = 'succeeded';
       found.tag.latestResultId = saved.at(-1)?.resultId || found.tag.latestResultId || null;
       Object.assign(found.tag, compactTag(found.tag));
       warnLargeTags(found.message);
-      await compat.save();
-      attempt.status = 'succeeded';
-      attempt.resultIds = saved.map(result => result.resultId);
-      attempt.completedAt = now();
-      found = await persistAttempt(found, attempt);
+      found = await persistAttempt(found, attempt, { alreadyStored: true });
       for (const id of expired) {
         try {
           await removeFile(resultIndex.get(id));

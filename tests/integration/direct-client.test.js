@@ -22,11 +22,13 @@ async function concurrentFixture(t, clock = {}) {
   t.after(() => { globalThis.fetch = originalFetch; });
   const requests = [];
   const uploads = [];
+  const uploadBodies = [];
   const deleted = [];
   globalThis.fetch = async (url, options) => {
     if (url === '/api/images/upload') {
       const input = JSON.parse(options.body);
       uploads.push(input.filename);
+      uploadBodies.push(input);
       return response(200, { path: `user/images/${input.filename}.${input.format}` });
     }
     if (url === '/api/images/delete') {
@@ -49,7 +51,7 @@ async function concurrentFixture(t, clock = {}) {
   await client.updatePreset({ baseUrl: 'https://example.com', apiKey: 'key-old', selectedModel: 'image', timeoutMs: 5 });
   const store = createStore();
   const runner = createGenerationRunner({ api: client, compat, store, ...clock, uuid: () => crypto.randomUUID() });
-  return { client, runner, store, tag, requests, uploads, deleted };
+  return { client, runner, store, tag, requests, uploads, uploadBodies, deleted };
 }
 
 test('同一标签最多保存八张历史图，超出的旧图片从画廊与磁盘硬删除', async t => {
@@ -98,6 +100,7 @@ for (const first of [0, 1]) {
     assert.equal(state.tag.resultIds.length, 2);
     assert.equal(state.tag.latestResultId, later.resultIds[0]);
     assert.equal(f.uploads.length, 2);
+    assert.equal(f.uploadBodies[0].image, PNG_BASE64, '上游 Base64 图片保持原值传给酒馆上传');
     assert.equal(f.runner.hasActive(f.tag.tagId), false);
     assert.ok(state.attempts.every(item => !JSON.stringify(item).includes('key-old') && !JSON.stringify(item).includes('key-new')));
   });

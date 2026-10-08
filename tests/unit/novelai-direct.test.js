@@ -270,6 +270,7 @@ test('NAI 中转站使用 Bearer Key、原生请求体并解析 ZIP 响应', asy
   assert.equal(request.body.parameters.width, 512);
   assert.equal(request.body.parameters.height, 768);
   assert.match(request.body.input, /^artist:sample, 1girl/);
-  assert.equal(result.sources[0].value, PNG_BASE64);
+  assert.equal(result.sources[0].sourceType, 'bytes');
+  assert.deepEqual(result.sources[0].value, new Uint8Array(png));
   assert.equal(result.seed, 7);
 });

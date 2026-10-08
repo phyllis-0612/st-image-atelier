@@ -4,6 +4,7 @@ import { DirectError, bytesToBase64 } from './openai-direct.js';
 export const GALLERY_METADATA_FILE = 'st-image-atelier-gallery.json';
 export const GALLERY_METADATA_URL = `/user/files/${GALLERY_METADATA_FILE}`;
 const DOCUMENT_SCHEMA_VERSION = 2;
+const RESULT_WRITE_DELAY_MS = 1000;
 
 function clone(value) {
   return typeof structuredClone === 'function'
@@ -58,21 +59,49 @@ function normalizeDocument(value) {
   return document;
 }
 
-export function createGalleryMetadataStore({ readDocument, writeDocument }) {
+export function createGalleryMetadataStore({ readDocument, writeDocument,
+  resultWriteDelayMs = RESULT_WRITE_DELAY_MS }) {
   let document = null;
   let initializePromise = null;
   let writeChain = Promise.resolve();
+  let pending = [];
+  let flushTimer = null;
 
-  async function transaction(mutator) {
+  function flush() {
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = null;
+    const batch = pending;
+    pending = [];
+    if (!batch.length) return;
     const operation = writeChain.then(async () => {
-      const next = clone(document);
-      await mutator(next);
-      next.updatedAt = new Date().toISOString();
+      // Clone the two small indexes, not every prompt and result object in the document.
+      const next = {
+        ...document,
+        results: { ...document.results },
+        attempts: { ...document.attempts },
+        updatedAt: new Date().toISOString(),
+      };
+      for (const job of batch) job.mutator(next);
       await writeDocument(next);
       document = next;
     });
     writeChain = operation.catch(() => {});
-    return operation;
+    operation.then(
+      () => batch.forEach(job => job.resolve()),
+      error => batch.forEach(job => job.reject(error)),
+    );
+  }
+
+  function transaction(mutator, { delayMs = 0 } = {}) {
+    return new Promise((resolve, reject) => {
+      pending.push({ mutator, resolve, reject });
+      if (delayMs > 0) {
+        if (flushTimer) clearTimeout(flushTimer);
+        flushTimer = setTimeout(flush, delayMs);
+      } else {
+        flush();
+      }
+    });
   }
 
   async function initialize({ legacyItems = [] } = {}) {
@@ -119,14 +148,14 @@ export function createGalleryMetadataStore({ readDocument, writeDocument }) {
       const attempt = document.attempts[attemptId];
       return attempt ? clone(attempt) : null;
     },
-    async putAttempts(attempts) {
+    async putAttempts(attempts, { deferred = false } = {}) {
       ready();
       if (!attempts?.length) return;
       await transaction(next => {
         for (const attempt of attempts) {
           if (attempt?.attemptId && attempt?.tagId) next.attempts[attempt.attemptId] = clone(attempt);
         }
-      });
+      }, { delayMs: deferred ? resultWriteDelayMs : 0 });
     },
     async removeAttempts(attemptIds) {
       ready();
@@ -150,6 +179,18 @@ export function createGalleryMetadataStore({ readDocument, writeDocument }) {
           next.results[item.resultId] = normalizeGalleryRecord(item);
         }
       });
+      return (items || []).map(item => api.get(item.resultId)).filter(Boolean);
+    },
+    async putGeneration(items, attempt) {
+      ready();
+      await transaction(next => {
+        for (const item of items || []) {
+          if (item?.resultId && item.status === 'available') {
+            next.results[item.resultId] = normalizeGalleryRecord(item);
+          }
+        }
+        if (attempt?.attemptId && attempt?.tagId) next.attempts[attempt.attemptId] = clone(attempt);
+      }, { delayMs: resultWriteDelayMs });
       return (items || []).map(item => api.get(item.resultId)).filter(Boolean);
     },
     async update(resultId, patch) {
@@ -222,6 +263,7 @@ export function createMemoryGalleryMetadataStore(initialDocument = null) {
   const store = createGalleryMetadataStore({
     readDocument: async () => clone(document),
     writeDocument: async value => { document = clone(value); },
+    resultWriteDelayMs: 0,
   });
   Object.defineProperty(store, 'document', { get: () => clone(document) });
   return store;

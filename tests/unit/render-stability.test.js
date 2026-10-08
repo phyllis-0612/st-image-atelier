@@ -143,6 +143,25 @@ test('其他卡片状态、轮询和无关设置变化不修改已完成卡片�
   observer.disconnect();
 });
 
+test('一张卡片状态改变时只读取并刷新对应卡片', t => {
+  const { container, renderer, state, store } = setup(t,
+    '<draw>cat by a window</draw><draw>dog on a porch</draw>');
+  const second = { tagId: 'tag-2', prompt: 'dog on a porch', ratio: 'square', ordinal: 1, count: 1 };
+  store.setTag(second.tagId, { tag: {}, attempts: [], results: [] });
+  renderer.mount('0', [{ tagId: 'tag-1', prompt: 'cat by a window', ratio: 'portrait', ordinal: 0, count: 1 }, second]);
+  assert.equal(container.querySelectorAll('.stia-card').length, 2);
+  let secondReads = 0;
+  const originalGet = store.state.tagStates.get.bind(store.state.tagStates);
+  store.state.tagStates.get = id => {
+    if (id === second.tagId) secondReads += 1;
+    return originalGet(id);
+  };
+  store.setTag('tag-1', { ...state, tag: { ...state.tag, status: 'succeeded' } });
+  assert.equal(secondReads, 0);
+  store.set({ settings: { ...store.state.settings, themeMode: 'dark' } });
+  assert.ok(secondReads > 0, '全局设置仍应刷新所有卡片');
+});
+
 test('历史张数和重绘按钮变化只更新文字控件，图片留在原位置且不重写 src', t => {
   const { dom, container, state, store } = setup(t);
   const card = container.querySelector('.stia-card');

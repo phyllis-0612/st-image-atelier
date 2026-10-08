@@ -3,6 +3,7 @@ import {
   event_types,
   getRequestHeaders,
   saveChatConditional,
+  saveChatDebounced,
   saveSettingsDebounced,
 } from '../../../../script.js';
 import { extension_settings, getContext } from '../../../extensions.js';
@@ -25,6 +26,7 @@ const compat = createStCompat({
   eventSource,
   eventTypes: event_types,
   saveChatConditional,
+  saveChatDebounced,
   getRequestHeaders,
 });
 const api = createApiClient({

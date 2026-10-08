@@ -8,12 +8,22 @@ import {
   extractUpstreamError,
   fetchJson,
   generateImages,
+  inspectBase64Image,
   normalizeImageSize,
   normalizeEndpoint,
   parseImageResponse,
   parseModelsResponse,
 } from '../../src/ui/api/openai-direct.js';
 import { PNG_BASE64 } from '../mocks/mock-upstream.js';
+
+test('上传用图片头检验保留原始 Base64，不展开整张图片', () => {
+  const inspected = inspectBase64Image(`data:image/png;base64,${PNG_BASE64}`);
+  assert.equal(inspected.base64, PNG_BASE64);
+  assert.equal(inspected.type.extension, 'png');
+  assert.equal(inspected.byteSize, Buffer.from(PNG_BASE64, 'base64').length);
+  assert.equal(inspectBase64Image(PNG_BASE64)?.base64, PNG_BASE64);
+  assert.equal(inspectBase64Image('not-an-image'), null);
+});
 
 test('免服务端适配器规范化地址且不重复 /v1', () => {
   assert.equal(

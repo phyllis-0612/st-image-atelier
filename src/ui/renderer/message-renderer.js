@@ -558,6 +558,10 @@ export function createMessageRenderer(dependencies) {
     cards.get(tagId)?.render();
   }
 
+  function hasConnected(tagId) {
+    return Boolean(cards.get(tagId)?.root.isConnected);
+  }
+
   /* 把卡片从楼里摘掉，并清掉它留下的空壳（只剩它一个的 <p>、空的楼底列表）。 */
   function removeCard(tagId) {
     const card = cards.get(tagId);
@@ -571,11 +575,16 @@ export function createMessageRenderer(dependencies) {
     return true;
   }
 
-  store.subscribe(() => {
+  store.subscribe((_state, change) => {
+    if (change?.type === 'tag') {
+      const card = cards.get(change.tagId);
+      if (card?.root.isConnected) card.render();
+      return;
+    }
     for (const card of cards.values()) {
       if (card.root.isConnected) card.render();
     }
   });
 
-  return { mount, renderTag, removeCard };
+  return { mount, renderTag, hasConnected, removeCard };
 }

@@ -4,6 +4,7 @@ export function createStCompat(dependencies) {
     eventSource,
     eventTypes,
     saveChatConditional,
+    saveChatDebounced,
     getRequestHeaders,
   } = dependencies;
 
@@ -31,6 +32,11 @@ export function createStCompat(dependencies) {
     if (typeof current?.saveChat === 'function') return current.saveChat();
     if (typeof current?.saveMetadata === 'function') return current.saveMetadata();
     throw new Error('当前 SillyTavern 未提供聊天保存方法');
+  }
+
+  function saveSoon() {
+    if (typeof saveChatDebounced === 'function') return saveChatDebounced();
+    return save();
   }
 
   function headers({ json = true } = {}) {
@@ -68,6 +74,7 @@ export function createStCompat(dependencies) {
     chat,
     currentChatId,
     save,
+    saveSoon,
     headers,
     event,
     on,

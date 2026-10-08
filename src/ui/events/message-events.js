@@ -29,7 +29,8 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
     const { metadata, changed } = reconcileTagMetadata(message, parsed);
     if (changed) {
       try {
-        await compat.save();
+        if (typeof compat.saveSoon === 'function') await compat.saveSoon();
+        else await compat.save();
       } catch (error) {
         console.error('[画笺] 无法保存标签元数据', error);
       }
@@ -48,7 +49,9 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
     } catch (error) {
       store.set({ serviceError: error });
     }
-    renderer.mount(messageId, tags);
+    // The first mount and targeted store updates already refreshed existing cards.
+    // Retry only if SillyTavern rebuilt the message DOM while metadata loaded.
+    if (!tags.every(tag => renderer.hasConnected?.(tag.tagId))) renderer.mount(messageId, tags);
 
     const eligibleLiveMessage = store.state.settings.enabled
       && live
@@ -149,9 +152,9 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
 
   function bind() {
     compat.on(['MESSAGE_RECEIVED'], (messageId, generationType) =>
-      processMessage(messageId, { live: true, generationType }));
+      scheduleMessage(messageId, { live: true, generationType }));
     compat.on(['CHARACTER_MESSAGE_RENDERED', 'MESSAGE_RENDERED'], messageId =>
-      processMessage(messageId, { live: false }));
+      scheduleMessage(messageId, { live: false }));
     /* 改写事件会赶在酒馆用 mes 重建这一层 DOM 之前到达。直接 processMessage 等于对着
        旧 DOM 干活：卡片还在、提示词还没回来，mount 判定无事可做直接退出；等重建真的发生，
        事件已经消耗掉了。改走 scheduleMessage，等 DOM_SETTLE_MS 落定后再处理，

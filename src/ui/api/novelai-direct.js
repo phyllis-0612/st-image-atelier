@@ -2,7 +2,6 @@ import { startGenerationTimeout } from '../../shared/generation-timeout.js';
 import { runGenerationWithRetry } from '../../shared/generation-retry.js';
 import {
   DirectError,
-  bytesToBase64,
   detectImageType,
   extractUpstreamError,
   normalizeEndpoint,
@@ -476,7 +475,7 @@ async function fetchNovelAi(url, options, timeoutMs, maxImageBytes, wait = {}) {
     }
     const imageType = detectImageType(bytes);
     if (imageType || contentType.startsWith('image/')) {
-      return [{ sourceType: 'base64', value: bytesToBase64(bytes), generationIndex: 0 }];
+      return [{ sourceType: 'bytes', value: bytes, generationIndex: 0 }];
     }
     const isZip = bytes.length >= 4
       && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
@@ -488,8 +487,8 @@ async function fetchNovelAi(url, options, timeoutMs, maxImageBytes, wait = {}) {
     }
     const imageBytes = await unzipNovelAiImages(bytes, maxImageBytes);
     return imageBytes.map((value, generationIndex) => ({
-      sourceType: 'base64',
-      value: bytesToBase64(value),
+      sourceType: 'bytes',
+      value,
       generationIndex,
     }));
   } catch (error) {
