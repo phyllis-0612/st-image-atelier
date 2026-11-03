@@ -460,10 +460,13 @@ export function createDirectApiClient({
       const response = await fetch(source.value, {
         ...(source.authorization ? { headers: { Authorization: source.authorization } } : {}),
         signal: controller.signal,
-        redirect: 'error',
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+        redirect: source.authorization ? 'error' : 'follow',
       });
       if (!response.ok) {
-        throw new DirectError('IMAGE_DOWNLOAD_FAILED', `HTTP ${response.status}`, response.status, true);
+        const message = `上游已生成，但图片下载返回 HTTP ${response.status}。请先到中转站查看原图。`;
+        throw new DirectError('IMAGE_DOWNLOAD_FAILED', message, response.status, false, message);
       }
       const length = Number(response.headers.get('content-length') || 0);
       if (length > namespace.settings.maxImageBytes) {
@@ -478,8 +481,8 @@ export function createDirectApiClient({
         `无法下载图片，可能被浏览器 CORS 阻止：${error?.message || 'Failed to fetch'}`,
         0,
         true,
-        '生图成功了，但浏览器下载不了上游返回的图片（图床没开 CORS 或有跳转）；'
-          + '请在“高级设置”把「图片返回格式」设为 b64_json 内嵌返回',
+        '上游已生成，但返回的是图片链接，浏览器没能下载。即使选了 b64_json，部分站点也只返回链接。'
+          + '请先到中转站查看原图，重试会重新生图。',
       );
     } finally {
       clearTimeout(timer);
@@ -499,7 +502,12 @@ export function createDirectApiClient({
       type = inspected.type;
       byteSize = inspected.byteSize;
     } else {
-      bytes = await bytesFromSource(source, signal);
+      try {
+        bytes = await bytesFromSource(source, signal);
+      } catch (error) {
+        if (signal?.aborted || !source.fallback) throw error;
+        bytes = await bytesFromSource(source.fallback, signal);
+      }
       type = detectImageType(bytes);
       byteSize = bytes.byteLength;
     }

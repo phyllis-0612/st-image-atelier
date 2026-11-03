@@ -71,7 +71,12 @@ class StorageService {
         throw new AppError('UPSTREAM_RESPONSE_INVALID', 'Base64 图片无法解码');
       }
     } else {
-      bytes = await this.fetchUrl(source.value, signal, source.authorization);
+      try {
+        bytes = await this.fetchUrl(source.value, signal, source.authorization);
+      } catch (error) {
+        if (signal?.aborted || !source.fallback) throw error;
+        bytes = await this.fetchUrl(source.fallback.value, signal, source.fallback.authorization);
+      }
     }
     if (!bytes.length || bytes.length > settings.maxImageBytes) {
       throw new AppError('LOCAL_SAVE_FAILED', '图片为空或超过大小限制');

@@ -1118,33 +1118,51 @@ for (const [name, patch, parameters, expected] of [
   });
 }
 
-test('流港异步图：用同一把 Key 下载受保护图片，上传酒馆后结束等待', async t => {
-  const f = await concurrentFixture(t);
-  await f.client.updatePreset({ baseUrl: 'https://api.ai-media.vip/v1', timeoutMs: 6000 });
-  const calls = [];
-  const gateway = 'https://api.ai-media.vip';
-  const task = '/v1/images/tasks/imgtask_FIXTURE';
-  const existingFetch = globalThis.fetch;
-  globalThis.fetch = async (url, options) => {
-    if (url.startsWith('/api/')) {
-      assert.equal(options.headers?.Authorization, undefined);
-      return existingFetch(url, options);
-    }
-    calls.push(url);
-    assert.equal(options.headers.Authorization, 'Bearer key-old');
-    if (url === gateway + '/v1/images/generations') {
-      assert.equal(JSON.parse(options.body).async, true);
-      return response(202, { task_id: 'imgtask_FIXTURE', status_url: task + '?view=summary', assets: [] });
-    }
-    if (url === gateway + task + '?view=summary') {
-      return response(200, { status: 'success', assets: [{ url: task + '/assets/image.png' }] });
-    }
-    assert.equal(url, gateway + task + '/assets/image.png');
-    assert.equal(options.redirect, 'error');
-    return new Response(Buffer.from(PNG_BASE64, 'base64'), { headers: { 'Content-Type': 'image/png' } });
-  };
-  const attempt = await f.runner.generate(f.tag, 'manual');
-  assert.equal(attempt.status, 'succeeded');
-  assert.equal(f.uploadBodies[0].image, PNG_BASE64);
-  assert.deepEqual(calls, [gateway + '/v1/images/generations', gateway + task + '?view=summary', gateway + task + '/assets/image.png']);
-});
+for (const inline of [true, false]) {
+  test(inline ? '流港摘要有链接时仍查询完整结果，直接保存 b64' : '流港签名图下载失败后改用同任务的受保护图，不重新生成', async t => {
+    const f = await concurrentFixture(t);
+    await f.client.updatePreset({ baseUrl: 'https://api.ai-media.vip/v1', timeoutMs: 6000 });
+    const calls = [];
+    const gateway = 'https://api.ai-media.vip';
+    const task = '/v1/images/tasks/imgtask_FIXTURE';
+    const signed = 'https://download.ai-media.vip/signed/1.png';
+    const asset = { signed_url: signed, url: task + '/assets/image.png' };
+    const existingFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      if (url.startsWith('/api/')) {
+        assert.equal(options.headers?.Authorization, undefined);
+        return existingFetch(url, options);
+      }
+      calls.push(url);
+      if (url === signed) {
+        assert.equal(options.headers?.Authorization, undefined);
+        assert.equal(options.credentials, 'omit');
+        assert.equal(options.redirect, 'follow');
+        throw new TypeError('Mock cross-origin download failed');
+      }
+      assert.equal(options.headers.Authorization, 'Bearer key-old');
+      if (url === gateway + '/v1/images/generations') {
+        const body = JSON.parse(options.body);
+        assert.equal(body.async, true);
+        assert.equal(body.response_format, 'b64_json');
+        return response(202, { task_id: 'imgtask_FIXTURE', status_url: task + '?view=summary', result_url: task, assets: [] });
+      }
+      if (url === gateway + task + '?view=summary') {
+        return response(200, { status: 'success', assets: [asset] });
+      }
+      if (url === gateway + task) {
+        return response(200, { status: 'success', assets: [asset], ...(inline ? { data: [{ b64_json: PNG_BASE64 }] } : {}) });
+      }
+      assert.equal(url, gateway + task + '/assets/image.png');
+      assert.equal(options.redirect, 'error');
+      return new Response(Buffer.from(PNG_BASE64, 'base64'), { headers: { 'Content-Type': 'image/png' } });
+    };
+    const attempt = await f.runner.generate(f.tag, 'manual');
+    assert.equal(attempt.status, 'succeeded');
+    assert.equal(f.uploadBodies[0].image, PNG_BASE64);
+    assert.deepEqual(calls, [
+      gateway + '/v1/images/generations', gateway + task + '?view=summary', gateway + task,
+      ...inline ? [] : [signed, gateway + task + '/assets/image.png'],
+    ]);
+  });
+}

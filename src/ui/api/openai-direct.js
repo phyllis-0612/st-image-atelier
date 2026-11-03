@@ -1,4 +1,4 @@
-import { imageSources, imageDownloadAuthorization, preferFluxPortAsync, responseDiagnostic, resolveImageResponse } from '../../shared/openai-image-response.js';
+import { imageSources, prepareImageDownloads, preferFluxPortAsync, responseDiagnostic, resolveImageResponse } from '../../shared/openai-image-response.js';
 import { startGenerationTimeout } from '../../shared/generation-timeout.js';
 import { runGenerationWithRetry } from '../../shared/generation-retry.js';
 
@@ -280,17 +280,14 @@ export async function generateImages({
       },
     });
     const sources = await resolveImageResponse(payload, {
-      endpoint, apiKey, signal, onPolling,
+      endpoint, apiKey, signal, onPolling, preferInline: body.response_format === 'b64_json',
       deadline: submittedAt + (Number(preset.timeoutMs) || 180_000),
       makeError: imageError,
       request: (url, pollSignal) => fetchJson(url, {
         method: 'GET', headers: authorization(apiKey), signal: pollSignal,
       }, 0),
     });
-    return sources.map(({ assetTaskId, ...source }) => {
-      const authorization = imageDownloadAuthorization({ ...source, assetTaskId }, endpoint, apiKey);
-      return authorization ? { ...source, authorization } : source;
-    });
+    return prepareImageDownloads(sources, endpoint, apiKey);
   } catch (error) {
     if (compatibilityRetry) error.compatibilityRetry = compatibilityRetry;
     throw error;

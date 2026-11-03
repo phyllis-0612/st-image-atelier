@@ -4,7 +4,7 @@ const { startGenerationTimeout } = require('../utils/generation-timeout');
 const { runGenerationWithRetry } = require('../utils/generation-retry');
 
 const { AppError } = require('../utils/errors');
-const { imageSources, imageDownloadAuthorization, preferFluxPortAsync, responseDiagnostic, resolveImageResponse } = require('../utils/openai-image-response');
+const { imageSources, prepareImageDownloads, preferFluxPortAsync, responseDiagnostic, resolveImageResponse } = require('../utils/openai-image-response');
 
 function normalizeEndpoint(baseUrl, endpointPath) {
   let url;
@@ -191,17 +191,14 @@ async function generate({ preset, apiKey, prompt, parameters, settings, signal, 
       },
     });
     const sources = await resolveImageResponse(payload, {
-      endpoint, apiKey, signal, onPolling,
+      endpoint, apiKey, signal, onPolling, preferInline: body.response_format === 'b64_json',
       deadline: submittedAt + (Number(preset.timeoutMs) || 180_000),
       makeError: imageError,
       request: (url, pollSignal) => fetchJson(url, {
         method: 'GET', headers: authorization(apiKey), signal: pollSignal,
       }, 0),
     });
-    return sources.map(({ assetTaskId, ...source }) => {
-      const authorization = imageDownloadAuthorization({ ...source, assetTaskId }, endpoint, apiKey);
-      return authorization ? { ...source, authorization } : source;
-    });
+    return prepareImageDownloads(sources, endpoint, apiKey);
   } catch (error) {
     if (compatibilityRetry) error.compatibilityRetry = compatibilityRetry;
     throw error;

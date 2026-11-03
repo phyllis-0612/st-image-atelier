@@ -28,7 +28,7 @@ function source(value, allowBase64 = false) {
   return null;
 }
 
-function imageSources(payload, taskOrigin) {
+function imageSources(payload, taskOrigin, includeAssets = true) {
   const results = [];
   const seen = new Set();
   const add = item => {
@@ -61,14 +61,25 @@ function imageSources(payload, taskOrigin) {
       if (!item && taskOrigin && typeof entry === 'string' && entry.startsWith('/v1/images/tasks/') && !/\s/.test(entry)) {
         item = { sourceType: 'url', value: new URL(entry, taskOrigin).href };
       }
-      if (item) { add(item); return; }
+      if (item) {
+        if (key === 'signed_url' && taskOrigin && item.sourceType === 'url') {
+          item.signed = true;
+          const protectedUrl = [value.url, value.download_url].map(value => {
+            if (typeof value !== 'string' || /\s/.test(value)) return null;
+            return trustedTaskUrl(value, new URL(taskOrigin));
+          }).find(url => url?.pathname.startsWith('/v1/images/tasks/') && url.href !== item.value);
+          if (protectedUrl) item.fallbackUrl = protectedUrl.href;
+        }
+        add(item);
+        return;
+      }
       if (entry && typeof entry === 'object') {
         const before = results.length;
         read(entry, depth + 1);
         if (results.length > before) return;
       }
     }
-    for (const key of CONTAINERS) read(value[key], depth + 1);
+    for (const key of CONTAINERS) if (key !== 'assets' || includeAssets) read(value[key], depth + 1);
     const messages = [value.message, ...(Array.isArray(value.choices) ? value.choices.map(choice => choice?.message) : [])];
     for (const message of messages) {
       if (!message || typeof message !== 'object') continue;
@@ -136,6 +147,19 @@ function imageDownloadAuthorization(source, endpoint, apiKey) {
   return undefined;
 }
 
+function prepareImageDownloads(sources, endpoint, apiKey) {
+  return sources.map(({ assetTaskId, fallbackUrl, signed, ...source }) => {
+    const authorization = !signed && imageDownloadAuthorization({ ...source, assetTaskId }, endpoint, apiKey);
+    if (authorization) source.authorization = authorization;
+    if (fallbackUrl) {
+      const fallback = { sourceType: 'url', value: fallbackUrl, assetTaskId };
+      const fallbackAuthorization = imageDownloadAuthorization(fallback, endpoint, apiKey);
+      if (fallbackAuthorization) source.fallback = { sourceType: 'url', value: fallbackUrl, authorization: fallbackAuthorization };
+    }
+    return source;
+  });
+}
+
 function responseDiagnostic(payload, apiKey = '') {
   const sensitive = /authorization|api[_-]?key|cookie|password|secret|access[_-]?token|refresh[_-]?token|signed[_-]?url|^(?:key|token|headers|prompt|input)$/i;
   let budget = 6500;
@@ -192,7 +216,7 @@ function waitForPoll(ms, signal) {
 }
 
 async function resolveImageResponse(payload, {
-  endpoint, apiKey, request, signal, deadline, onPolling, makeError, sleep = waitForPoll,
+  endpoint, apiKey, request, signal, deadline, onPolling, makeError, preferInline = false, sleep = waitForPoll,
 }) {
   const error = (code, message, status = 400, response = payload) =>
     makeError(code, `${message}；上游响应：${responseDiagnostic(response, apiKey)}`, status);
@@ -200,15 +224,22 @@ async function resolveImageResponse(payload, {
   const fluxPort = isFluxPort(base);
   const task = taskEnvelope(payload);
   const asyncMode = String(task?.record.execution_mode || '').toLowerCase() === 'async';
+  const status = record => String(record?.status ?? record?.state ?? record?.task_status ?? '').trim();
+  const preferTaskResult = fluxPort && preferInline;
   // Some synchronous gateways attach a task ID to images that are already available.
   const immediate = imageSources(asyncMode ? task.record.assets : payload, task ? base.origin : undefined);
-  if (immediate.length && !(fluxPort && asyncMode && task.record.status && !DONE.test(task.record.status))) return task ? immediate.map(item => ({ ...item, assetTaskId: task.id })) : immediate;
+  const initialStatus = status(task?.record);
+  const alreadyDone = DONE.test(initialStatus);
+  const preferFullInitial = task && preferTaskResult && immediate.some(item => item.sourceType === 'url')
+    && (alreadyDone || !initialStatus && task.record.result_url);
+  if (immediate.length && !preferFullInitial && !(fluxPort && asyncMode && initialStatus && !alreadyDone)) {
+    return task ? immediate.map(item => ({ ...item, assetTaskId: task.id })) : immediate;
+  }
   if (!task) throw error('UPSTREAM_RESPONSE_INVALID', '响应中没有可识别的图片');
   const id = typeof task.id === 'number' && Number.isSafeInteger(task.id) ? String(task.id) : task.id;
   if (typeof id !== 'string' || !/^[\w-][\w.:-]{0,255}$/.test(id)) {
     throw error('UPSTREAM_RESPONSE_INVALID', '异步任务缺少有效的任务 ID');
   }
-  const status = record => String(record?.status ?? record?.state ?? record?.task_status ?? '').trim();
   if (task.record.auto_poll === false && !DONE.test(status(task.record))) {
     throw error('UPSTREAM_RESPONSE_INVALID', '中转站要求停止查询，请在中转站核对原任务，先不要重绘');
   }
@@ -218,7 +249,7 @@ async function resolveImageResponse(payload, {
     : `${base.pathname.replace(/\/$/, '')}/${encodeURIComponent(id)}`;
   const url = trustedTaskUrl(task.record.status_url ?? task.record.poll_url, base) ?? legacy;
   const withAssetTask = sources => sources.map(item => ({ ...item, assetTaskId: id }));
-  let resultUrl = trustedTaskUrl(task.record.result_url, base) ?? (fluxPort ? legacy : null);
+  const receiptResultUrl = trustedTaskUrl(task.record.result_url, base) ?? (fluxPort ? legacy : null);
   const controller = new AbortController();
   const abort = () => controller.abort(signal.reason);
   if (signal?.aborted) abort();
@@ -227,9 +258,38 @@ async function resolveImageResponse(payload, {
   const remaining = () => deadline - Date.now();
   const timeout = () => error('UPSTREAM_TIMEOUT', '中转站异步任务超过预设等待时间', 504, last);
   const timer = setTimeout(() => controller.abort(timeout()), Math.max(0, remaining()));
+  async function finish(record, images, fetchedUrl) {
+    const resultUrl = trustedTaskUrl(record?.result_url, base) ?? receiptResultUrl;
+    const wantInline = preferTaskResult && images.some(item => item.sourceType === 'url');
+    if (images.length && !wantInline) return withAssetTask(images);
+
+    let result = last;
+    if (resultUrl && resultUrl.href !== fetchedUrl && remaining() > 0) {
+      try {
+        result = await request(resultUrl.href, controller.signal);
+        if (controller.signal.aborted) throw controller.signal.reason;
+        if (remaining() <= 0) throw timeout();
+      } catch (error) {
+        // The summary already gave us usable links. An optional full result request must not lose them.
+        if (images.length && !signal?.aborted) return withAssetTask(images);
+        throw controller.signal.aborted ? controller.signal.reason : error;
+      }
+    }
+    const normalized = imageSources(result, base.origin, false);
+    if (normalized.length && (!images.length || (normalized.length >= images.length
+      && normalized.filter(item => item.sourceType === 'base64').length > images.filter(item => item.sourceType === 'base64').length))) {
+      return withAssetTask(normalized);
+    }
+    if (images.length) return withAssetTask(images);
+    const full = imageSources(result, base.origin);
+    if (full.length) return withAssetTask(full);
+    throw error('UPSTREAM_RESPONSE_INVALID', '任务已完成，但结果中没有可识别的图片', 400, result);
+  }
+
   try {
     if (remaining() <= 0) throw timeout();
     if (controller.signal.aborted) throw controller.signal.reason;
+    if (preferFullInitial || alreadyDone) return await finish(task.record, immediate, null);
     await onPolling?.('中转站在后台排队画');
     const delayHint = record => Math.min(10_000, Math.max(2000, Number(record?.poll_after_ms) || 2000));
     for (let delay = delayHint(task.record); ; delay = Math.min(10_000, Math.max(Math.ceil(delay * 1.5), delayHint(last)))) {
@@ -249,23 +309,10 @@ async function resolveImageResponse(payload, {
       const record = taskEnvelope(last, true)?.record ?? last;
       if (FAILURE.test(status(record))) throw error('UPSTREAM_HTTP_ERROR', '中转站异步任务失败', 502, last);
       const images = imageSources(record?.assets, base.origin);
-      if (images.length && (!fluxPort || !status(record) || DONE.test(status(record)))) return withAssetTask(images);
-      if (record?.auto_poll === false && !DONE.test(status(record))) {
+      if (DONE.test(status(record))) return await finish(record, images, url.href);
+      if (images.length && (!fluxPort || !status(record))) return await finish(record, images, url.href);
+      if (record?.auto_poll === false) {
         throw error('UPSTREAM_RESPONSE_INVALID', '中转站要求停止查询，请在中转站核对原任务，先不要重绘', 400, last);
-      }
-      if (DONE.test(status(record))) {
-        resultUrl = trustedTaskUrl(record?.result_url, base) ?? resultUrl;
-        if (resultUrl && resultUrl.href !== url.href) {
-          last = await request(resultUrl.href, controller.signal).catch(e => {
-            if (controller.signal.aborted) throw controller.signal.reason;
-            throw e;
-          });
-          if (controller.signal.aborted) throw controller.signal.reason;
-          if (remaining() <= 0) throw timeout();
-        }
-        const finishedImages = imageSources(resultUrl && resultUrl.href !== url.href ? last : record, base.origin);
-        if (finishedImages.length) return withAssetTask(finishedImages);
-        throw error('UPSTREAM_RESPONSE_INVALID', '任务已完成，但结果中没有可识别的图片', 400, last);
       }
       if (!record || typeof record !== 'object' || !['assets', 'status', 'state', 'task_status', 'execution_mode', 'task_id', 'taskId'].some(key => key in record)) {
         throw error('UPSTREAM_RESPONSE_INVALID', '任务查询响应格式不兼容', 400, last);
@@ -277,4 +324,4 @@ async function resolveImageResponse(payload, {
   }
 }
 
-module.exports = { imageSources, imageDownloadAuthorization, preferFluxPortAsync, responseDiagnostic, resolveImageResponse };
+module.exports = { imageSources, prepareImageDownloads, preferFluxPortAsync, responseDiagnostic, resolveImageResponse };

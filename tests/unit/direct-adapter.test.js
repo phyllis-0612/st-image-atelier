@@ -593,3 +593,22 @@ test('流港自动请求异步，只提交一次，显式同步配置保持原�
     assert.deepEqual(sent, [true, false]);
   }
 });
+
+test('完整结果读取失败或少图时仍保留流港摘要的全部图片', async () => {
+  const assets = [{ url: sampleImage }, { url: 'https://example.com/second.png' }];
+  for (const fail of [true, false]) {
+    const endpoint = 'https://api.ai-media.vip/v1/images/generations';
+    const sources = await resolveImageResponse({
+      task_id: 'imgtask_1', status_url: '/v1/images/tasks/imgtask_1?view=summary',
+    }, taskOptions({
+      endpoint,
+      preferInline: true,
+      request: async url => {
+        if (url.endsWith('?view=summary')) return { status: 'success', assets };
+        if (fail) throw new Error('result unavailable');
+        return { data: [{ b64_json: PNG_BASE64 }] };
+      },
+    }));
+    assert.deepEqual(sources.map(item => item.value), assets.map(asset => asset.url));
+  }
+});
