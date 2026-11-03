@@ -454,9 +454,11 @@ export function createDirectApiClient({
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error('timeout')), namespace.settings.downloadTimeoutMs);
     const abort = () => controller.abort(signal.reason);
-    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
     try {
       const response = await fetch(source.value, {
+        ...(source.authorization ? { headers: { Authorization: source.authorization } } : {}),
         signal: controller.signal,
         redirect: 'error',
       });
@@ -722,6 +724,7 @@ export function createDirectApiClient({
       attempt.status = 'downloading';
       attempt.statusMessage = null;
       found = await persistAttempt(found, attempt, { defer: true });
+      input.onProgress?.(clone(attempt));
       for (const source of sources) {
         if (controller.signal.aborted) throw controller.signal.reason || new Error('cancelled');
         saved.push(await saveSource(source, input, attempt, controller.signal));

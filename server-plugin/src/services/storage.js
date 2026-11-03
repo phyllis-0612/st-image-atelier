@@ -20,7 +20,7 @@ class StorageService {
     return this;
   }
 
-  async fetchUrl(url, signal) {
+  async fetchUrl(url, signal, authorization) {
     const settings = await this.settingsProvider();
     const parsed = new URL(url);
     if (parsed.protocol !== 'https:' && !(settings.allowHttp && parsed.protocol === 'http:')) {
@@ -29,11 +29,15 @@ class StorageService {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), settings.downloadTimeoutMs || 60_000);
     const abort = () => controller.abort(signal.reason);
-    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
     try {
       let current = parsed;
       for (let redirects = 0; redirects <= 3; redirects += 1) {
-        const response = await fetch(current, { signal: controller.signal, redirect: 'manual' });
+        const response = await fetch(current, {
+          ...(authorization && redirects === 0 ? { headers: { Authorization: authorization } } : {}),
+          signal: controller.signal, redirect: 'manual',
+        });
         if ([301, 302, 303, 307, 308].includes(response.status)) {
           const location = response.headers.get('location');
           if (!location || redirects === 3) throw new AppError('IMAGE_DOWNLOAD_FAILED', '图片重定向次数过多');
@@ -67,7 +71,7 @@ class StorageService {
         throw new AppError('UPSTREAM_RESPONSE_INVALID', 'Base64 图片无法解码');
       }
     } else {
-      bytes = await this.fetchUrl(source.value, signal);
+      bytes = await this.fetchUrl(source.value, signal, source.authorization);
     }
     if (!bytes.length || bytes.length > settings.maxImageBytes) {
       throw new AppError('LOCAL_SAVE_FAILED', '图片为空或超过大小限制');

@@ -1,4 +1,4 @@
-import { imageSources, responseDiagnostic, resolveImageResponse } from '../../shared/openai-image-response.js';
+import { imageSources, imageDownloadAuthorization, preferFluxPortAsync, responseDiagnostic, resolveImageResponse } from '../../shared/openai-image-response.js';
 import { startGenerationTimeout } from '../../shared/generation-timeout.js';
 import { runGenerationWithRetry } from '../../shared/generation-retry.js';
 
@@ -250,6 +250,7 @@ export async function generateImages({
     body.stream = false;
     delete body.prompt;
   }
+  const fluxPortAsync = preferFluxPortAsync(endpoint, body);
   let submittedAt;
 
   const request = payloadBody => {
@@ -266,7 +267,7 @@ export async function generateImages({
   try {
     const payload = await runGenerationWithRetry({
       request: () => request(body),
-      enabled: settings?.enableSmartRetry === true,
+      enabled: !fluxPortAsync && settings?.enableSmartRetry === true,
       signal, onRetry, retryDelays,
       recover: async error => {
         if (compatibilityRetry) return null;
@@ -278,13 +279,17 @@ export async function generateImages({
         return retry;
       },
     });
-    return await resolveImageResponse(payload, {
+    const sources = await resolveImageResponse(payload, {
       endpoint, apiKey, signal, onPolling,
       deadline: submittedAt + (Number(preset.timeoutMs) || 180_000),
       makeError: imageError,
       request: (url, pollSignal) => fetchJson(url, {
         method: 'GET', headers: authorization(apiKey), signal: pollSignal,
       }, 0),
+    });
+    return sources.map(({ assetTaskId, ...source }) => {
+      const authorization = imageDownloadAuthorization({ ...source, assetTaskId }, endpoint, apiKey);
+      return authorization ? { ...source, authorization } : source;
     });
   } catch (error) {
     if (compatibilityRetry) error.compatibilityRetry = compatibilityRetry;

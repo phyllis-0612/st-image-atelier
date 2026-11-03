@@ -1117,3 +1117,34 @@ for (const [name, patch, parameters, expected] of [
     assert.equal((await f.client.galleryMetadata()).items[0].parameters.quality, expected);
   });
 }
+
+test('流港异步图：用同一把 Key 下载受保护图片，上传酒馆后结束等待', async t => {
+  const f = await concurrentFixture(t);
+  await f.client.updatePreset({ baseUrl: 'https://api.ai-media.vip/v1', timeoutMs: 6000 });
+  const calls = [];
+  const gateway = 'https://api.ai-media.vip';
+  const task = '/v1/images/tasks/imgtask_FIXTURE';
+  const existingFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    if (url.startsWith('/api/')) {
+      assert.equal(options.headers?.Authorization, undefined);
+      return existingFetch(url, options);
+    }
+    calls.push(url);
+    assert.equal(options.headers.Authorization, 'Bearer key-old');
+    if (url === gateway + '/v1/images/generations') {
+      assert.equal(JSON.parse(options.body).async, true);
+      return response(202, { task_id: 'imgtask_FIXTURE', status_url: task + '?view=summary', assets: [] });
+    }
+    if (url === gateway + task + '?view=summary') {
+      return response(200, { status: 'success', assets: [{ url: task + '/assets/image.png' }] });
+    }
+    assert.equal(url, gateway + task + '/assets/image.png');
+    assert.equal(options.redirect, 'error');
+    return new Response(Buffer.from(PNG_BASE64, 'base64'), { headers: { 'Content-Type': 'image/png' } });
+  };
+  const attempt = await f.runner.generate(f.tag, 'manual');
+  assert.equal(attempt.status, 'succeeded');
+  assert.equal(f.uploadBodies[0].image, PNG_BASE64);
+  assert.deepEqual(calls, [gateway + '/v1/images/generations', gateway + task + '?view=summary', gateway + task + '/assets/image.png']);
+});

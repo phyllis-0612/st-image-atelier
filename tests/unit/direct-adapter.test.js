@@ -532,3 +532,64 @@ test('达到预设超时时取消进行中的 GET 查询', async () => {
   assert.equal(queries, 1);
   assert.equal(aborted, true);
 });
+
+test('流港使用回执的同源查询地址和完成结果地址，跨域回执不会收到 Key', async () => {
+  const endpoint = 'https://api.ai-media.vip/v1/images/generations';
+  const statusUrl = 'https://api.ai-media.vip/v1/images/tasks/imgtask_1?view=summary';
+  const resultUrl = 'https://api.ai-media.vip/v1/images/tasks/imgtask_1';
+  const calls = [];
+  const result = await resolveImageResponse({
+    task_id: 'imgtask_1', status_url: '/v1/images/tasks/imgtask_1?view=summary',
+    result_url: 'https://evil.example/collect', assets: [], poll_after_ms: 4000,
+  }, taskOptions({
+    endpoint,
+    sleep: async ms => assert.equal(ms, 4000),
+    request: async url => {
+      calls.push(url);
+      return url === statusUrl ? { status: 'success', assets: [] } : { data: [{ b64_json: PNG_BASE64 }] };
+    },
+  }));
+  assert.deepEqual(calls, [statusUrl, resultUrl]);
+  assert.equal(result[0].value, PNG_BASE64);
+});
+
+test('流港优先用签名图链接，受保护的任务图片只允许使用同源鉴权', async () => {
+  const { imageDownloadAuthorization } = await import('../../src/shared/openai-image-response.js');
+  const endpoint = 'https://api.uselg.top/v1/images/generations';
+  const items = await resolveImageResponse({ task_id: 'imgtask_1' }, taskOptions({
+    endpoint,
+    request: async url => {
+      assert.equal(url, 'https://api.uselg.top/v1/images/tasks/imgtask_1');
+      return { status: 'success', assets: [
+        { signed_url: 'https://download.ai-media.vip/signed/1.png', url: '/v1/images/tasks/imgtask_1/assets/1.png' },
+        { download_url: '/v1/images/tasks/imgtask_1/assets/2.png?download=1' },
+        { url: 'https://api.uselg.top/v1/images/tasks/imgtask_OTHER/assets/3.png' },
+      ] };
+    },
+  }));
+  assert.equal(items[0].value, 'https://download.ai-media.vip/signed/1.png');
+  assert.equal(items[1].value, 'https://api.uselg.top/v1/images/tasks/imgtask_1/assets/2.png?download=1');
+  assert.deepEqual(items.map(item => imageDownloadAuthorization(item, endpoint, 'test-key')), [undefined, 'Bearer test-key', undefined]);
+});
+
+test('流港自动请求异步，只提交一次，显式同步配置保持原样', async t => {
+  const fetchBefore = globalThis.fetch;
+  t.after(() => { globalThis.fetch = fetchBefore; });
+  for (const generate of [generateImages, serverImages.generate]) {
+    const sent = [];
+    globalThis.fetch = async (_url, init) => {
+      sent.push(JSON.parse(init.body).async);
+      return sent.length === 1 ? Response.json({ error: 'gateway unavailable' }, { status: 502 })
+        : Response.json({ data: [{ b64_json: PNG_BASE64 }] });
+    };
+    const options = {
+      preset: { baseUrl: 'https://api.ai-media.vip/v1', generationPath: '/v1/images/generations', selectedModel: 'image', timeoutMs: 1000 },
+      apiKey: 'test-key', prompt: 'a cat', parameters: {}, settings: { enableSmartRetry: true }, retryDelays: [0],
+    };
+    await assert.rejects(generate(options));
+    assert.deepEqual(sent, [true]);
+    const [image] = await generate({ ...options, preset: { ...options.preset, extraBody: { async: false } } });
+    assert.equal(image.value, PNG_BASE64);
+    assert.deepEqual(sent, [true, false]);
+  }
+});

@@ -4,7 +4,7 @@ const { startGenerationTimeout } = require('../utils/generation-timeout');
 const { runGenerationWithRetry } = require('../utils/generation-retry');
 
 const { AppError } = require('../utils/errors');
-const { imageSources, responseDiagnostic, resolveImageResponse } = require('../utils/openai-image-response');
+const { imageSources, imageDownloadAuthorization, preferFluxPortAsync, responseDiagnostic, resolveImageResponse } = require('../utils/openai-image-response');
 
 function normalizeEndpoint(baseUrl, endpointPath) {
   let url;
@@ -160,6 +160,7 @@ async function generate({ preset, apiKey, prompt, parameters, settings, signal, 
     body.stream = false;
     delete body.prompt;
   }
+  const fluxPortAsync = preferFluxPortAsync(endpoint, body);
   let submittedAt;
 
 
@@ -177,7 +178,7 @@ async function generate({ preset, apiKey, prompt, parameters, settings, signal, 
   try {
     const payload = await runGenerationWithRetry({
       request: () => request(body),
-      enabled: settings?.enableSmartRetry === true,
+      enabled: !fluxPortAsync && settings?.enableSmartRetry === true,
       signal, onRetry, retryDelays,
       recover: async error => {
         if (compatibilityRetry) return null;
@@ -189,13 +190,17 @@ async function generate({ preset, apiKey, prompt, parameters, settings, signal, 
         return retry;
       },
     });
-    return await resolveImageResponse(payload, {
+    const sources = await resolveImageResponse(payload, {
       endpoint, apiKey, signal, onPolling,
       deadline: submittedAt + (Number(preset.timeoutMs) || 180_000),
       makeError: imageError,
       request: (url, pollSignal) => fetchJson(url, {
         method: 'GET', headers: authorization(apiKey), signal: pollSignal,
       }, 0),
+    });
+    return sources.map(({ assetTaskId, ...source }) => {
+      const authorization = imageDownloadAuthorization({ ...source, assetTaskId }, endpoint, apiKey);
+      return authorization ? { ...source, authorization } : source;
     });
   } catch (error) {
     if (compatibilityRetry) error.compatibilityRetry = compatibilityRetry;
