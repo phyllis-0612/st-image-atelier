@@ -1,3 +1,4 @@
+import { imageSources, responseDiagnostic, resolveImageResponse } from '../../shared/openai-image-response.js';
 import { startGenerationTimeout } from '../../shared/generation-timeout.js';
 import { runGenerationWithRetry } from '../../shared/generation-retry.js';
 
@@ -56,31 +57,13 @@ export function validateEndpoint(urlString, allowHttp = false) {
   return url;
 }
 
-function findDataArray(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (!payload || typeof payload !== 'object') return null;
-  if (Array.isArray(payload.data)) return payload.data;
-  for (const key of ['result', 'output', 'response']) {
-    const found = findDataArray(payload[key]);
-    if (found) return found;
-  }
-  return null;
+function imageError(code, details, status) {
+  return new DirectError(code, details, status, false, details);
 }
 
-export function parseImageResponse(payload) {
-  const items = findDataArray(payload);
-  if (!items?.length) throw new DirectError('UPSTREAM_RESPONSE_INVALID', '响应中没有图片数组');
-  const results = items.map((item, generationIndex) => {
-    if (!item || typeof item !== 'object') return null;
-    if (typeof item.b64_json === 'string' && item.b64_json) {
-      return { sourceType: 'base64', value: item.b64_json, generationIndex };
-    }
-    if (typeof item.url === 'string' && item.url) {
-      return { sourceType: 'url', value: item.url, generationIndex };
-    }
-    return null;
-  }).filter(Boolean);
-  if (!results.length) throw new DirectError('UPSTREAM_RESPONSE_INVALID', '响应中没有 url 或 b64_json');
+export function parseImageResponse(payload, apiKey = '') {
+  const results = imageSources(payload);
+  if (!results.length) throw imageError('UPSTREAM_RESPONSE_INVALID', `响应中没有可识别的图片；上游响应：${responseDiagnostic(payload, apiKey)}`);
   return results;
 }
 
@@ -173,11 +156,15 @@ export async function fetchJson(url, options, timeoutMs, wait = {}) {
   try {
     const response = await fetch(url, { ...options, signal: controller.signal, redirect: 'error' });
     const text = await response.text();
-    if (!response.ok) throw mapStatus(response.status, text.slice(0, 1000));
+    if (!response.ok) {
+      const key = options.headers?.Authorization?.slice(7);
+      const safeText = key ? text.split(key).join('[已隐藏密钥]') : text;
+      throw mapStatus(response.status, safeText.slice(0, 1000));
+    }
     try {
       return JSON.parse(text);
     } catch {
-      throw new DirectError('UPSTREAM_RESPONSE_INVALID', '上游返回的不是 JSON');
+      throw imageError('UPSTREAM_RESPONSE_INVALID', `上游返回的不是 JSON；上游响应：${responseDiagnostic(text, options.headers?.Authorization?.slice(7))}`);
     }
   } catch (error) {
     if (error instanceof DirectError) throw error;
@@ -234,6 +221,7 @@ export async function generateImages({
   onRetry,
   retryDelays,
   onTimeout,
+  onPolling,
   onRequestParameters,
 }) {
   if (!preset.baseUrl) throw new DirectError('PRESET_NOT_CONFIGURED');
@@ -250,13 +238,22 @@ export async function generateImages({
   if (preset.sendN) body.n = parameters.count || preset.defaultCount;
   /* 默认请求 b64_json 内嵌返回：很多中转站会把图片转成图床 URL，浏览器再去拉那张图时
      常被 CORS 或跳转拦下（尤其手机）。内嵌返回跳过这一步。「额外请求参数 JSON」可覆盖。 */
+  const chatEndpoint = /\/chat\/completions$/i.test(new URL(endpoint).pathname);
   const responseFormat = normalizeResponseFormat(preset.responseFormat);
-  if (responseFormat) body.response_format = responseFormat;
+  if (!chatEndpoint && responseFormat) body.response_format = responseFormat;
   Object.assign(body, preset.extraBody || {}, parameters.extraBody || {});
   body.model = preset.selectedModel;
   body.prompt = prompt.trim();
   if ('size' in body) body.size = normalizeImageSize(body.size);
+  if (chatEndpoint) {
+    body.messages = [{ role: 'user', content: body.prompt }];
+    body.stream = false;
+    delete body.prompt;
+  }
+  let submittedAt;
+
   const request = payloadBody => {
+    submittedAt = Date.now();
     onRequestParameters?.({ size: payloadBody.size ?? null, quality: payloadBody.quality ?? null });
     return fetchJson(endpoint, {
       method: 'POST',
@@ -281,7 +278,14 @@ export async function generateImages({
         return retry;
       },
     });
-    return parseImageResponse(payload);
+    return await resolveImageResponse(payload, {
+      endpoint, apiKey, signal, onPolling,
+      deadline: submittedAt + (Number(preset.timeoutMs) || 180_000),
+      makeError: imageError,
+      request: (url, pollSignal) => fetchJson(url, {
+        method: 'GET', headers: authorization(apiKey), signal: pollSignal,
+      }, 0),
+    });
   } catch (error) {
     if (compatibilityRetry) error.compatibilityRetry = compatibilityRetry;
     throw error;

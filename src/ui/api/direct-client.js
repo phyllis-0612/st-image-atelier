@@ -703,6 +703,11 @@ export function createDirectApiClient({
           signal: controller.signal,
           onRetry,
           onTimeout,
+          onPolling: async message => {
+            attempt.statusMessage = message;
+            found = await persistAttempt(found, attempt, { defer: true });
+            input.onProgress?.(clone(attempt));
+          },
           retryDelays,
           onCompatibilityRetry: async retry => {
             attempt.compatibilityRetry = retry;

@@ -126,6 +126,10 @@ class GenerationService {
         signal: controller.signal,
         retryDelays: this.retryDelays,
         onRequestParameters: values => Object.assign(attempt.parameters, values),
+        onPolling: async message => {
+          attempt.statusMessage = message;
+          await this.metadata.putAttempt(attempt);
+        },
         onTimeout: async timeoutMs => {
           if (attempt.status !== 'generating' || controller.signal.aborted) return;
           attempt.statusMessage = generationWaitMessage(timeoutMs);

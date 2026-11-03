@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { resolveImageResponse } from '../../src/shared/openai-image-response.js';
 import {
   DirectError,
   base64ToBytes,
@@ -361,4 +363,172 @@ test('取消发生在回退前时不发送第二次请求；多图仍按一个�
   });
   assert.equal(calls, 2);
   assert.equal(results.length, 2);
+});
+
+const serverImages = createRequire(import.meta.url)('../../server-plugin/src/adapters/openai-images.js');
+const sampleImage = 'https://example.com/result.png';
+
+for (const [name, adapter] of [
+  ['直连', { generate: generateImages, parse: parseImageResponse }],
+  ['服务端', { generate: serverImages.generate, parse: serverImages.parseImageResponse }],
+]) {
+  test(name + '兼容图片字段、链接数组、聊天正文与内嵌数据', () => {
+    const samples = [
+      { images: [sampleImage] }, { data: { url: sampleImage } }, { data: sampleImage },
+      { url: sampleImage }, { image: sampleImage }, [sampleImage], { output: sampleImage },
+      { result: { output: [sampleImage] } },
+      { choices: [{ message: { images: [{ image_url: { url: sampleImage } }] } }] },
+      { choices: [{ message: { content: '画好了：![画](<'+sampleImage+'>) 说明 https://example.com/docs' } }] },
+      { choices: [{ message: { content: '画好了：'+sampleImage+'。' } }] },
+      { choices: [{ message: { content: [{ type: 'image_url', image_url: { url: sampleImage } }] } }] },
+      { message: { images: [sampleImage], content: '![同一张]('+sampleImage+')' } },
+      { assets: [{ download_url: sampleImage }] },
+    ];
+    for (const payload of samples) {
+      assert.deepEqual(adapter.parse(payload), [{ sourceType: 'url', value: sampleImage, generationIndex: 0 }], JSON.stringify(payload));
+    }
+    for (const payload of [
+      { base64: PNG_BASE64 }, { image: PNG_BASE64 },
+      { url: 'data:image/png;base64,' + PNG_BASE64 },
+      { choices: [{ message: { images: [{ image_url: { url: 'data:image/png;base64,' + PNG_BASE64 } }] } }] },
+    ]) {
+      assert.deepEqual(adapter.parse(payload), [{ sourceType: 'base64', value: PNG_BASE64, generationIndex: 0 }]);
+    }
+    assert.throws(() => adapter.parse({ url: 'file:///tmp/result.png' }), /返回格式|上游响应/);
+  });
+
+  test(name + '聊天端点发送 messages，识别 message.images', async t => {
+    const fetchBefore = globalThis.fetch;
+    t.after(() => { globalThis.fetch = fetchBefore; });
+    globalThis.fetch = async (url, init) => {
+      assert.equal(url, 'https://example.com/v1/chat/completions');
+      const body = JSON.parse(init.body);
+      assert.deepEqual(body.messages, [{ role: 'user', content: 'a cat' }]);
+      assert.equal(body.stream, false);
+      assert.equal(Object.hasOwn(body, 'prompt'), false);
+      assert.equal(Object.hasOwn(body, 'response_format'), false);
+      return Response.json({ choices: [{ message: { images: [sampleImage] } }] });
+    };
+    const items = await adapter.generate({
+      preset: { baseUrl: 'https://example.com/v1', generationPath: '/v1/chat/completions', selectedModel: 'image', timeoutMs: 1000 },
+      apiKey: 'test-key', prompt: 'a cat', parameters: {}, settings: {},
+    });
+    assert.equal(items[0].value, sampleImage);
+  });
+
+  test(name + '收到小票后显示排队，使用同一密钥 GET 原任务，不再次 POST', async t => {
+    const fetchBefore = globalThis.fetch;
+    t.after(() => { globalThis.fetch = fetchBefore; });
+    const calls = [], progress = [];
+    globalThis.fetch = async (url, init) => {
+      calls.push([url, init.method, init.headers.Authorization]);
+      if (init.method === 'POST') return Response.json({ data: { id: 'job-21', execution_mode: 'async', assets: [] } }, { status: 202 });
+      assert.deepEqual(progress, ['中转站在后台排队画']);
+      return Response.json({ status: 'success', data: { status: 'completed', assets: [{ url: sampleImage }] } });
+    };
+    const items = await adapter.generate({
+      preset: { baseUrl: 'https://example.com/v1', generationPath: '/v1/images/generations', selectedModel: 'image', timeoutMs: 6000 },
+      apiKey: 'test-key', prompt: 'a cat', parameters: {}, settings: { enableSmartRetry: true },
+      onPolling: message => progress.push(message),
+    });
+    assert.equal(items[0].value, sampleImage);
+    assert.deepEqual(calls, [
+      ['https://example.com/v1/images/generations', 'POST', 'Bearer test-key'],
+      ['https://example.com/v1/images/generations/job-21', 'GET', 'Bearer test-key'],
+    ]);
+  });
+
+  test(name + '未知响应保留诊断结构并遮住密钥、签名和图片数据', () => {
+    assert.throws(() => adapter.parse({
+      mystery: { api_key: 'private-value', note: 'gateway-credential', url: 'https://example.com/?signature=private-signature' },
+      extra: { base64: PNG_BASE64 },
+    }, 'gateway-credential'), error => {
+      assert.equal(error.code, 'UPSTREAM_RESPONSE_INVALID');
+      assert.match(error.details, /mystery.*api_key/);
+      for (const secret of ['private-value', 'gateway-credential', 'private-signature', PNG_BASE64]) {
+        assert.ok(!error.details.includes(secret));
+      }
+      return true;
+    });
+  });
+}
+
+function taskOptions(overrides = {}) {
+  return {
+    endpoint: 'https://example.com/v1/images/generations', deadline: Date.now() + 60_000,
+    sleep: async () => {},
+    makeError: (code, details, status) => new DirectError(code, details, status, false, details),
+    ...overrides,
+  };
+}
+
+test('状态查询采用递增间隔，最长十秒；临时错误只重试 GET', async () => {
+  const delays = [];
+  let attempts = 0;
+  const images = await resolveImageResponse({ task_id: 'task-42', assets: [] }, taskOptions({
+    sleep: async delay => delays.push(delay),
+    request: async () => {
+      attempts++;
+      if (attempts === 2) throw new DirectError('UPSTREAM_HTTP_ERROR', 'temporary', 502, true);
+      return attempts < 7 ? { status: 'processing', assets: [] } : { status: 'completed', assets: [sampleImage] };
+    },
+  }));
+  assert.equal(images[0].value, sampleImage);
+  assert.deepEqual(delays, [2000, 3000, 4500, 6750, 10000, 10000, 10000]);
+});
+
+test('异步任务超时或取消时不再发状态查询', async () => {
+  const request = async () => assert.fail('没有等待预算或取消后不应请求');
+  const payload = { execution_mode: 'async', id: 'task-42', assets: [] };
+  await assert.rejects(resolveImageResponse(payload, taskOptions({ deadline: Date.now() - 1, request })), error =>
+    error.code === 'UPSTREAM_TIMEOUT' && error.details.includes('task-42') && !error.retryable);
+  const controller = new AbortController();
+  const reason = new Error('用户取消');
+  await assert.rejects(resolveImageResponse(payload, taskOptions({
+    signal: controller.signal, request, onPolling: () => controller.abort(reason),
+  })), error => error === reason);
+});
+
+test('任务失败或完成但无图立即退出，并给出最后一次查询的诊断', async () => {
+  for (const [status, code] of [['failed', 'UPSTREAM_HTTP_ERROR'], ['completed', 'UPSTREAM_RESPONSE_INVALID']]) {
+    let calls = 0;
+    await assert.rejects(resolveImageResponse({ task_id: 'id-1' }, taskOptions({
+      request: async () => { calls++; return { status, assets: [], extra: 'final-result' }; },
+    })), error => error.code === code && error.details.includes('final-result'));
+    assert.equal(calls, 1);
+  }
+  await assert.rejects(resolveImageResponse({ task_id: '../bad' }, taskOptions({
+    request: async () => assert.fail('异常任务 ID 不发请求'),
+  })), /有效的任务 ID/);
+});
+
+test('同步回图附带任务 ID 时直接接图；异步小票不会把回显链接当成结果', async () => {
+  const request = async () => assert.fail('已回图无需轮询');
+  const sync = await resolveImageResponse({ task_id: 'id-1', data: [sampleImage] }, taskOptions({ request }));
+  assert.equal(sync[0].value, sampleImage);
+  let calls = 0;
+  const asyncImages = await resolveImageResponse({
+    task_id: 'id-2', execution_mode: 'async', assets: [], url: 'https://example.com/input.png',
+  }, taskOptions({
+    request: async () => { calls++; return { status: 'completed', assets: [sampleImage] }; },
+  }));
+  assert.equal(calls, 1);
+  assert.equal(asyncImages[0].value, sampleImage);
+});
+
+test('达到预设超时时取消进行中的 GET 查询', async () => {
+  let queries = 0;
+  let aborted = false;
+  await assert.rejects(resolveImageResponse({ task_id: 'slow-task', assets: [] }, taskOptions({
+    deadline: Date.now() + 100,
+    request: async (_url, signal) => {
+      queries++;
+      return new Promise((_resolve, reject) => signal.addEventListener('abort', () => {
+        aborted = true;
+        reject(signal.reason);
+      }, { once: true }));
+    },
+  })), error => error.code === 'UPSTREAM_TIMEOUT');
+  assert.equal(queries, 1);
+  assert.equal(aborted, true);
 });
