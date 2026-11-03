@@ -52,6 +52,22 @@
 - 不允许 Key 进入浏览器运行时；
 - 需要服务端进程锁、原子 JSON 元数据和更强的跨标签页幂等。
 
+### 下载服务端插件包（无需 Git）
+
+先确认酒馆里的画笺扩展已更新到 **1.6.18 或以上**。下载 [Server Plugin 1.3.11](https://github.com/phyllis-0612/st-image-atelier/raw/refs/heads/main/downloads/atelier-server-1.3.11.tar.gz)，把安装包放到运行 SillyTavern 的设备上。退出正在运行的 SillyTavern 后，在它的安装目录执行：
+
+```bash
+mkdir -p plugins &&
+tar -xzf "/实际下载路径/atelier-server-1.3.11.tar.gz" -C plugins &&
+node -p "require('./plugins/st-image-atelier/package.json').version"
+```
+
+输出 `1.3.11` 后，在 SillyTavern 的 `config.yaml` 里确认 `enableServerPlugins: true`，然后重新启动。终端出现 `[画笺] Server Plugin 已加载` 后，刷新网页，在画笺「设置 → 高级设置 → 运行模式」选择「Server Plugin 增强模式」，保存后重新填写服务端 API 预设。
+
+Termux 可先执行 `termux-setup-storage` 并允许文件访问，然后使用 `"$HOME/storage/downloads/atelier-server-1.3.11.tar.gz"` 作为安装包路径。如果酒馆在 VPS 或 Docker 上，需要把插件装到那台主机或容器挂载的 `plugins` 目录；只在手机浏览器里下载不会启用服务器上的插件。
+
+### 用仓库脚本安装
+
 在 SillyTavern 主机上运行：
 
 ```bash

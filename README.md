@@ -154,7 +154,7 @@ API Key 保存在当前 SillyTavern 账户的前端账户存储中，不写入�
 
 ## 可选增强模式
 
-仓库仍包含 `server-plugin/`。它适用于不支持 CORS 的中转站，或必须把完整 Key 与生成幂等锁留在服务端的部署。安装方法见 [docs/INSTALLATION.md](docs/INSTALLATION.md)。普通用户无需安装。
+仓库仍包含 `server-plugin/`。它适用于不支持 CORS 的中转站，或必须把完整 Key 与生成幂等锁留在服务端的部署。可直接[下载 Server Plugin 1.3.11 安装包](https://github.com/phyllis-0612/st-image-atelier/raw/refs/heads/main/downloads/atelier-server-1.3.11.tar.gz)，无需克隆仓库。安装方法见[增强模式安装说明](docs/INSTALLATION.md#可选server-plugin-增强模式)。普通用户无需安装。
 
 ## 测试
 
