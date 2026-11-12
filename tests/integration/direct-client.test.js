@@ -970,7 +970,7 @@ test('旧聊天副本不会自动复活已删除的画廊记录', async () => {
   const [state] = await client.resolveTags([tagId]);
   assert.equal(state.results.length, 0);
   assert.equal('results' in tag, true);
-  assert.deepEqual(tag.resultIds, []);
+  assert.deepEqual(tag.resultIds, [resultId], '只保留未知来源的引用，不复活已删除的画廊记录');
   assert.equal((await client.galleryMetadata()).total, 0);
 });
 

@@ -1,5 +1,6 @@
 import { parseDrawTags, shouldProcessMessage } from '../parser/draw-parser.js';
 import { reconcileTagMetadata } from '../state/tag-identity.js';
+import { hasGenerationHistory } from '../state/tag-history.js';
 
 const DOM_SETTLE_MS = 140;
 const SOURCE_SCAN_INTERVAL_MS = 1_500;
@@ -43,9 +44,11 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
       chatId: compat.currentChatId(),
     }));
     renderer.mount(messageId, tags);
+    let historyLoaded = false;
     try {
       const resolved = await api.resolveTags(tags.map(tag => tag.tagId));
       for (const value of resolved) store.setTag(value.tagId, value);
+      historyLoaded = !resolved.some(value => value.historyUnavailable);
     } catch (error) {
       store.set({ serviceError: error });
     }
@@ -54,13 +57,14 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
     if (!tags.every(tag => renderer.hasConnected?.(tag.tagId))) renderer.mount(messageId, tags);
 
     const eligibleLiveMessage = store.state.settings.enabled
+      && historyLoaded
       && live
       && generationType !== 'first_message'
       && store.state.settings.autoGenerate;
     if (eligibleLiveMessage) {
       for (const tag of tags.slice(0, 3)) {
         const current = store.state.tagStates.get(tag.tagId);
-        if (!current?.tag?.autoAttempted && !current?.tag?.autoSuppressed && !tag.autoSuppressed) {
+        if (!hasGenerationHistory(tag, current)) {
           autoQueue.enqueue(tag);
         }
       }
@@ -125,7 +129,9 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
           if (addedId != null) ids.add(addedId);
         }
       }
-      for (const id of ids) scheduleMessage(id, { live: hydrated });
+      // DOM rebuilding, scrolling and switching modes are not new AI replies.
+      // Raw-source changes and MESSAGE_RECEIVED already schedule genuine new tags.
+      for (const id of ids) scheduleMessage(id, { live: false });
     });
     observer.observe(chatElement, { childList: true, characterData: true, subtree: true });
   }

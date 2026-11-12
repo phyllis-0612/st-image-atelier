@@ -584,12 +584,7 @@ export function createDirectApiClient({
             interrupted = true;
           }
         }
-        const availableIds = [...new Set(found.tag.resultIds || [])]
-          .filter(resultId => resultIndex.has(resultId));
-        found.tag.resultIds = availableIds;
-        if (!availableIds.includes(found.tag.latestResultId)) {
-          found.tag.latestResultId = availableIds.at(-1) || null;
-        }
+        // Resolving is a read: never prune another mode's result references.
       }
       values.push(stateOf(tagId));
     }

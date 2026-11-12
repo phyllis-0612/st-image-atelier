@@ -1,5 +1,6 @@
 import { API_ROOT } from '../../shared/constants.js';
 import { createDirectApiClient } from './direct-client.js';
+import { mergeTagHistory } from '../state/tag-history.js';
 
 export class ApiError extends Error {
   constructor(error, status) {
@@ -96,6 +97,82 @@ export function createApiClient({
   });
   const server = createServerApiClient(compat);
   const selected = () => direct.mode() === 'server' ? server : direct;
+  const attemptOwners = new Map();
+  const resultOwners = new Map();
+
+  async function resolveTags(tagIds) {
+    const primary = selected();
+    const chatId = compat.currentChatId();
+    const found = new Map();
+    for (const message of compat.chat()) {
+      for (const tag of message?.extra?.stImageAtelier?.tags || []) {
+        if (tagIds.includes(tag.tagId)) found.set(tag.tagId, tag);
+      }
+    }
+    const replies = await Promise.allSettled([direct.resolveTags(tagIds), server.resolveTags(tagIds)]);
+    const primaryReply = replies[primary === direct ? 0 : 1];
+    // Do not turn a failed history lookup into permission to generate again.
+    const historyUnavailable = primaryReply.status === 'rejected';
+    if (replies.every(reply => reply.status === 'rejected')) throw primaryReply.reason;
+    const byId = replies.map((reply, index) => {
+      if (reply.status === 'rejected') return new Map();
+      const owner = index === 0 ? direct : server;
+      for (const value of reply.value) {
+        for (const attempt of value.attempts || []) attemptOwners.set(attempt.attemptId, owner);
+        for (const result of value.results || []) {
+          resultOwners.set(result.resultId, result.storageMode === 'server' ? server : owner);
+        }
+      }
+      return new Map(reply.value.map(value => [value.tagId, value]));
+    });
+    let changed = false;
+    const merged = tagIds.map(tagId => {
+      const tag = found.get(tagId);
+      const value = mergeTagHistory(tagId, tag, byId.map(index => index.get(tagId)));
+      if (historyUnavailable) value.historyUnavailable = true;
+      if (tag && value.tag && chatId === compat.currentChatId()
+        && JSON.stringify(tag) !== JSON.stringify({ ...tag, ...value.tag })) {
+        Object.assign(tag, value.tag);
+        changed = true;
+      }
+      return value;
+    });
+    if (changed) {
+      if (typeof compat.saveSoon === 'function') await compat.saveSoon();
+      else await compat.save();
+    }
+    return merged;
+  }
+
+  function generate(input) {
+    const owner = input.provider === 'novelai' ? direct : selected();
+    attemptOwners.set(input.attemptId, owner);
+    return owner.generate(input);
+  }
+
+  async function deleteResult(resultId) {
+    const result = await (resultOwners.get(resultId) || selected()).deleteResult(resultId);
+    let changed = false;
+    for (const message of compat.chat()) {
+      for (const variant of [message, ...(message?.swipe_info || [])]) {
+        for (const tag of variant?.extra?.stImageAtelier?.tags || []) {
+          if (!(tag.resultIds || []).includes(resultId)) continue;
+          tag.resultIds = tag.resultIds.filter(id => id !== resultId);
+          tag.resultRefs = (tag.resultRefs || []).filter(ref => ref.resultId !== resultId);
+          if (Array.isArray(tag.results)) tag.results = tag.results.filter(item => item.resultId !== resultId);
+          if (tag.latestResultId === resultId) tag.latestResultId = tag.resultIds.at(-1) || null;
+          tag.autoSuppressed = true;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      if (typeof compat.saveSoon === 'function') await compat.saveSoon();
+      else await compat.save();
+    }
+    resultOwners.delete(resultId);
+    return result;
+  }
 
   async function getSettings() {
     const local = await direct.getSettings();
@@ -161,18 +238,16 @@ export function createApiClient({
     clearSecret: presetId => selected().clearSecret(presetId),
     listModels: presetId => selected().listModels(presetId),
     testPreset: presetId => selected().testPreset(presetId),
-    resolveTags: tagIds => selected().resolveTags(tagIds),
+    resolveTags,
     slimCurrentChat: onProgress => direct.slimCurrentChat(onProgress),
-    generate: input => input.provider === 'novelai'
-      ? direct.generate(input)
-      : selected().generate(input),
-    attempt: attemptId => selected().attempt(attemptId),
-    cancel: attemptId => selected().cancel(attemptId),
+    generate,
+    attempt: attemptId => (attemptOwners.get(attemptId) || selected()).attempt(attemptId),
+    cancel: attemptId => (attemptOwners.get(attemptId) || selected()).cancel(attemptId),
     gallery: options => selected().gallery(options),
     galleryMetadata: () => selected().galleryMetadata(),
     cleanupGallery: () => selected().cleanupGallery(),
-    deleteResult: resultId => selected().deleteResult(resultId),
-    setFavorite: (resultId, favorite) => selected().setFavorite(resultId, favorite),
+    deleteResult,
+    setFavorite: (resultId, favorite) => (resultOwners.get(resultId) || selected()).setFavorite(resultId, favorite),
     fileUrl: resultId => direct.hasResult(resultId)
       ? direct.fileUrl(resultId)
       : server.fileUrl(resultId),

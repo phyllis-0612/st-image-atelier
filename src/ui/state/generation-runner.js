@@ -1,6 +1,7 @@
 import { createGenerationNotifications } from './generation-notifications.js';
 import { ACTIVE_STATUSES, upsertAttempt } from './generation-state.js';
 import { normalizeBackupSettings } from '../../shared/backup-generation.js';
+import { hasGenerationHistory } from './tag-history.js';
 
 export function createGenerationRunner({ api, compat, store, uuid, runGalleryCleanup = () => {}, pollIntervalMs = 900,
   setTimer = setTimeout, clearTimer = clearTimeout }) {
@@ -36,7 +37,8 @@ export function createGenerationRunner({ api, compat, store, uuid, runGalleryCle
   }
 
   async function generate(tag, mode, overrides = {}) {
-    if (mode === 'auto' && hasActive(tag.tagId)) return;
+    if (mode === 'auto' && (hasActive(tag.tagId)
+      || hasGenerationHistory(tag, store.state.tagStates.get(tag.tagId)))) return;
     const parallel = hasActive(tag.tagId);
     const notifications = createGenerationNotifications(compat.notify);
     const attemptId = mode === 'auto' ? `auto:${tag.tagId}` : uuid();
