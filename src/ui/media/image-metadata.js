@@ -1,4 +1,7 @@
 export function imageDuration(result, attempt) {
+  // A recovered or imported picture was not drawn by this attempt, so it has no generation time.
+  if (result?.recoveredFromTask || result?.importedImage
+    || (result?.attemptId && result.attemptId === attempt?.attemptId && (attempt.recoveryTaskId || attempt.importedImage))) return '';
   let milliseconds = result?.generationDurationMs;
   if (typeof milliseconds !== 'number' || !Number.isFinite(milliseconds) || milliseconds < 0) {
     if (!result?.attemptId || result.attemptId !== attempt?.attemptId) return '';

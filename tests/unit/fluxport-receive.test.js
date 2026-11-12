@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveImageResponse } from '../../src/shared/openai-image-response.js';
-import { DirectError, fetchJson, generateImages } from '../../src/ui/api/openai-direct.js';
+import { DirectError, fetchJson, generateImages, recoverFluxPortImages } from '../../src/ui/api/openai-direct.js';
 import { imageTimingBreakdown } from '../../src/ui/media/image-metadata.js';
 import { PNG_BASE64 } from '../mocks/mock-upstream.js';
 
@@ -244,4 +244,133 @@ test('长错误回包的停止标记仍被识别，提示不会暴露 Key，也�
       && error.message.includes('没能确认这次生图的结果'));
     assert.equal(count, 1);
   }
+});
+
+// 先正常传一段，然后只剩零星字节：连接不断，但永远收不完。
+function trickle(head, signal) {
+  const encoder = new TextEncoder();
+  let timer;
+  return new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(head));
+      timer = setInterval(() => controller.enqueue(encoder.encode('A')), 10);
+      signal?.addEventListener('abort', () => { clearInterval(timer); try { controller.error(signal.reason); } catch { /* closed */ } }, { once: true });
+    },
+    cancel() { clearInterval(timer); },
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+
+const stalledSync = '{"task_id":"imgtask_abc","execution_mode":"sync","data":[{"b64_json":"' + 'A'.repeat(2000);
+
+test('同步回包传输停滞：放弃这条连接，按回包开头的任务号重读原任务，生图只提交一次', async t => {
+  const fetchBefore = globalThis.fetch;
+  t.after(() => { globalThis.fetch = fetchBefore; });
+  const calls = [];
+  const notices = [];
+  const progress = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push(`${init.method} ${new URL(url).pathname}`);
+    if (init.method === 'POST') return trickle(stalledSync, init.signal);
+    return Response.json(inline);
+  };
+  const sources = await generateImages({
+    preset: preset({ extraBody: { async: false }, timeoutMs: 60_000 }), apiKey: 'test-key', prompt: 'a cat', parameters: {},
+    settings: { enableSmartRetry: true }, retryDelays: [0, 0, 0], stallMs: 1300,
+    onPolling: message => notices.push(message), onReceive: value => progress.push(value),
+  });
+  assert.equal(sources[0].value, PNG_BASE64);
+  assert.deepEqual(calls, ['POST /v1/images/generations', 'GET /v1/images/tasks/imgtask_abc']);
+  assert.deepEqual(notices, ['回包传输停滞，正在换一条连接读取原任务（不重新生图）']);
+  assert.ok(progress.some(item => item.receiving && typeof item.speed === 'number'), '接收中报告当前速度');
+});
+
+test('停滞的回包开头没有任务号时停止并指路；非流港站点不因停滞中断', async t => {
+  const fetchBefore = globalThis.fetch;
+  t.after(() => { globalThis.fetch = fetchBefore; });
+  let posts = 0;
+  globalThis.fetch = async (_url, init) => { posts++; return trickle('{"data":[{"b64_json":"' + 'A'.repeat(2000), init.signal); };
+  await assert.rejects(generateImages({
+    preset: preset({ extraBody: { async: false }, timeoutMs: 60_000 }), apiKey: 'test-key', prompt: 'a cat', parameters: {},
+    settings: { enableSmartRetry: true }, retryDelays: [0, 0, 0], stallMs: 80,
+  }), error => /传输停滞/.test(error.message) && /找回流港图片/.test(error.message) && /导入原图/.test(error.message)
+    && error.retryable === false);
+  assert.equal(posts, 1);
+  // 其他中转站没有“重读原任务”的办法，慢也只能继续等，由用户决定是否取消。
+  const controller = new AbortController();
+  const other = generateImages({
+    preset: preset({ baseUrl: 'https://relay.example.com/v1', timeoutMs: 60_000 }), apiKey: 'test-key', prompt: 'a cat',
+    parameters: {}, settings: {}, stallMs: 80, signal: controller.signal,
+  });
+  const outcome = await Promise.race([other.then(() => 'done', () => 'failed'), pause(400).then(() => 'still waiting')]);
+  assert.equal(outcome, 'still waiting');
+  controller.abort(new Error('cancelled'));
+  await assert.rejects(other);
+});
+
+test('找回：只读原任务；连续三条连接都停滞就停下并说明，不无限重连', async t => {
+  const fetchBefore = globalThis.fetch;
+  t.after(() => { globalThis.fetch = fetchBefore; });
+  const calls = [];
+  let timing;
+  globalThis.fetch = async (url, init) => {
+    calls.push(`${init.method} ${new URL(url).pathname}`);
+    assert.equal(init.headers.Authorization, 'Bearer test-key');
+    return calls.length < 3 ? trickle('{"status":"completed","data":[{"b64_json":"' + 'A'.repeat(2000), init.signal)
+      : Response.json({ ...inline, padding: 'x'.repeat(70_000) });
+  };
+  const sources = await recoverFluxPortImages({
+    preset: preset(), apiKey: 'test-key', taskId: 'imgtask_abc', stallMs: 80, onTiming: value => { timing = value; },
+  });
+  assert.equal(sources[0].value, PNG_BASE64);
+  assert.deepEqual(calls, Array(3).fill('GET /v1/images/tasks/imgtask_abc'));
+  assert.ok(timing.receiveBytes > 70_000);
+
+  calls.length = 0;
+  globalThis.fetch = async (url, init) => {
+    calls.push(init.method);
+    return trickle('{"status":"completed","data":[{"b64_json":"' + 'A'.repeat(2000), init.signal);
+  };
+  await assert.rejects(recoverFluxPortImages({ preset: preset(), apiKey: 'test-key', taskId: 'imgtask_abc', stallMs: 80 }),
+    error => /连续 3 次连接都在传输中停滞/.test(error.message) && /换 API 域名或开代理/.test(error.message));
+  assert.deepEqual(calls, ['GET', 'GET', 'GET']);
+
+  globalThis.fetch = async () => Response.json({ error: { message: 'task not found' } }, { status: 404 });
+  await assert.rejects(recoverFluxPortImages({ preset: preset(), apiKey: 'test-key', taskId: 'imgtask_abc' }),
+    /找回图片失败（HTTP 404）：流港没有找到这个任务/);
+  globalThis.fetch = async () => assert.fail('不应请求');
+  await assert.rejects(recoverFluxPortImages({ preset: preset({ baseUrl: 'https://relay.example.com/v1' }), apiKey: 'k', taskId: 'imgtask_abc' }), /流港预设/);
+  await assert.rejects(recoverFluxPortImages({ preset: preset(), apiKey: 'k', taskId: '../x' }), /完整的流港图片任务 ID/);
+});
+
+test('取图有进展就不掐断：慢但在动的下载可以超过独立时限，停住的仍按时限结束', async () => {
+  const receipt = { task_id: 'imgtask_1', status_url: '/v1/images/tasks/imgtask_1?view=summary', assets: [] };
+  const request = moving => async (url, signal, kind) => {
+    if (url.includes('view=summary')) return { status: 'completed', assets: [] };
+    for (let step = 0; step < 6; step++) {
+      await Promise.race([pause(40), untilAbort(signal)]);
+      if (moving) kind.touch();
+    }
+    return inline;
+  };
+  const images = await resolveImageResponse(receipt, options({ resultTimeoutMs: 100, request: request(true) }));
+  assert.equal(images[0].value, PNG_BASE64);
+  await assert.rejects(resolveImageResponse(receipt, options({ resultTimeoutMs: 100, request: request(false) })),
+    error => error.code === 'UPSTREAM_TIMEOUT');
+  // 没有摘要地址时，状态查询本身就是那次大下载，同样适用。
+  const direct = await resolveImageResponse({ task_id: 'imgtask_1', execution_mode: 'async', assets: [] }, options({
+    deadline: Date.now() + 20, resultTimeoutMs: 100,
+    request: async (_url, signal, kind) => {
+      for (let step = 0; step < 6; step++) { await Promise.race([pause(40), untilAbort(signal)]); kind.touch(); }
+      return inline;
+    },
+  }));
+  assert.equal(direct[0].value, PNG_BASE64);
+});
+
+test('独立取图时限不会越过总等待上限', async () => {
+  await assert.rejects(resolveImageResponse({
+    task_id: 'imgtask_1', status: 'completed', assets: [],
+  }, options({ maxWaitMs: 60, resultTimeoutMs: 2000, keepWaiting: true,
+    request: (_url, signal) => untilAbort(signal),
+  })), error => error.code === 'UPSTREAM_TIMEOUT');
 });

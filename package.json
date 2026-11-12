@@ -1,6 +1,6 @@
 {
   "name": "st-image-atelier",
-  "version": "1.6.20",
+  "version": "1.6.21",
   "description": "画笺：SillyTavern 1.14-1.18 GPT 与 NovelAI 生图扩展",
   "type": "module",
   "private": true,

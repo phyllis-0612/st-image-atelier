@@ -10,6 +10,7 @@ import { extension_settings, getContext } from '../../../extensions.js';
 import { accountStorage } from '../../../util/AccountStorage.js';
 import { createStCompat } from './src/ui/compat/st-api.js';
 import { createApiClient } from './src/ui/api/client.js';
+import { isFluxPortPreset } from './src/ui/api/openai-direct.js';
 import { createStore } from './src/ui/state/store.js';
 import { createAutoQueue } from './src/ui/state/auto-queue.js';
 import { createGenerationRunner } from './src/ui/state/generation-runner.js';
@@ -65,6 +66,30 @@ let panel;
 let promptOverrideDialog;
 const actions = {
   generate,
+  // Both only touch pictures that already exist: nothing is generated or billed.
+  canImportOriginal: () => api.mode() === 'direct' && store.state.settings.generationProvider !== 'novelai',
+  canRecover: () => api.mode() === 'direct' && store.state.settings.generationProvider !== 'novelai'
+    && isFluxPortPreset(store.state.preset),
+  recover: tag => {
+    const taskId = window.prompt('粘贴流港「使用记录 → 详情」里的请求 ID（imgtask_ 开头）。只读取已生成的图片，不会重新生图；'
+      + '读取时卡片会显示实时速度。')?.trim();
+    if (!taskId) return;
+    if (!/^imgtask_[a-z0-9_-]{1,120}$/i.test(taskId)) {
+      compat.notify?.('warning', '请输入完整的 imgtask_ 图片任务 ID。', '画笺 · 找回图片');
+      return;
+    }
+    return generate(tag, 'manual', { recoveryTaskId: taskId, provider: 'openai' });
+  },
+  importOriginal: tag => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/webp';
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (file) void generate(tag, 'manual', { recoveryFile: file, provider: 'openai' });
+    }, { once: true });
+    input.click();
+  },
   adjustRegenerate: async (tag, context = {}) => {
     const provider = store.state.settings.generationProvider || 'openai';
     const value = await promptOverrideDialog.open({

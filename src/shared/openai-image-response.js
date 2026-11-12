@@ -304,20 +304,29 @@ export async function resolveImageResponse(payload, {
     return true;
   }
   let inFlightSince = 0;
+  // A download that is visibly making progress is not cut off: each report of real progress renews
+  // its allowance, up to `maxWaitMs` in total. A stalled one still ends when the allowance runs out.
+  const hardStop = Date.now() + maxWaitMs;
+  let collecting = false;
+  const touch = () => {
+    if (controller.signal.aborted || Date.now() >= hardStop) return;
+    if (inFlightSince) inFlightSince = Date.now();
+    else if (collecting) arm(Math.min(Date.now() + resultTimeoutMs, hardStop));
+  };
   function schedule(at) {
     clearTimeout(timer);
     timer = setTimeout(() => {
       if (keepGoing()) return;
       // A query that is already under way may be carrying the finished image (some gateways answer
       // the status query with the whole result), so it gets the result allowance before being cut.
-      const grace = inFlightSince ? inFlightSince + resultTimeoutMs : 0;
+      const grace = inFlightSince ? Math.min(inFlightSince + resultTimeoutMs, hardStop) : 0;
       if (grace > Date.now()) schedule(grace);
       else controller.abort(timeout());
     }, Math.max(0, at - Date.now()));
   }
   function arm(at) {
-    limit = at;
-    schedule(at);
+    limit = Math.min(at, hardStop);
+    schedule(limit);
   }
   const expired = () => remaining() <= 0 && !keepGoing();
   arm(deadline);
@@ -333,7 +342,8 @@ export async function resolveImageResponse(payload, {
       extended = true;
       if (!controller.signal.aborted) arm(Date.now() + resultTimeoutMs);
       try {
-        result = await request(resultUrl.href, controller.signal, { result: true });
+        collecting = true;
+        result = await request(resultUrl.href, controller.signal, { result: true, touch });
         if (controller.signal.aborted) throw controller.signal.reason;
       } catch (error) {
         // The summary already gave us usable links. An optional full result request must not lose them.
@@ -366,7 +376,7 @@ export async function resolveImageResponse(payload, {
       if (expired()) throw timeout();
       inFlightSince = Date.now();
       try {
-        last = await request(url.toString(), controller.signal, { result: false });
+        last = await request(url.toString(), controller.signal, { result: false, touch });
       } catch (e) {
         if (controller.signal.aborted) throw controller.signal.reason;
         if (e.retryable) continue; // Retry the status query, never the generation POST.
@@ -380,6 +390,10 @@ export async function resolveImageResponse(payload, {
       const images = imageSources(record?.assets, base.origin);
       if (DONE.test(status(record))) return await finish(record, images, url.href);
       if (images.length && (!fluxPort || !status(record))) return await finish(record, images, url.href);
+      if (!status(record)) {
+        const carried = imageSources(last, base.origin);
+        if (carried.length) return withAssetTask(carried);
+      }
       const halted = stopNotice(last);
       if (halted) throw error('UPSTREAM_HTTP_ERROR', stopNoticeMessage(halted, apiKey), 502, last);
       if (record?.auto_poll === false) {

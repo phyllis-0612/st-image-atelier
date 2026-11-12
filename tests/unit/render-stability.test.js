@@ -86,7 +86,7 @@ for (const first of ['old', 'new']) {
   });
 }
 
-function setup(t, html = '<p>正文之前</p><draw>cat by a window</draw><p>正文之后</p>') {
+function setup(t, html = '<p>正文之前</p><draw>cat by a window</draw><p>正文之后</p>', extraActions = {}) {
   const dom = new JSDOM('<!DOCTYPE html><div class="mes"><div class="mes_text"></div></div>', {
     url: 'http://localhost',
   });
@@ -119,12 +119,57 @@ function setup(t, html = '<p>正文之前</p><draw>cat by a window</draw><p>正�
       generate: (...args) => generated.push(args),
       adjustRegenerate: (...args) => adjusted.push(args),
       cancel() {}, openGallery() {}, remove() {},
+      ...extraActions,
     },
   });
   const container = dom.window.document.querySelector('.mes_text');
   container.innerHTML = html;
   renderer.mount('0', [tag]);
   return { dom, container, renderer, tag, state, store, generated, adjusted };
+}
+
+for (const mode of ['completed', 'failed', 'idle', 'generating', 'recovering']) {
+  test('找回和导入按钮可见性与点击分流：' + mode, t => {
+    let eligible = true;
+    const recovered = [], imported = [];
+    const { container, state, store, generated } = setup(t, '<draw>cat by a window</draw>', {
+      canRecover: () => eligible, canImportOriginal: () => eligible,
+      recover: tag => recovered.push(tag), importOriginal: tag => imported.push(tag),
+    });
+    if (mode !== 'completed') {
+      state.results = [];
+      state.tag.latestResultId = null;
+      state.attempts = mode === 'idle' ? [] : [{
+        attemptId: 'attempt', status: mode === 'failed' ? 'failed' : 'generating',
+        ...(mode === 'recovering' ? { recoveryTaskId: 'imgtask_test' } : {}),
+      }];
+    } else {
+      state.results[0].recoveredFromTask = true;
+      state.results[0].transferTiming = { waitMs: 2000, receiveMs: 10000, saveMs: 1000, receiveBytes: 100000 };
+    }
+    store.setTag('tag-1', state);
+    const buttons = () => [...container.querySelectorAll('button')];
+    const find = text => buttons().find(button => button.textContent.includes(text));
+    if (mode === 'recovering') {
+      assert.equal(find('找回流港图片'), undefined);
+      assert.equal(find('导入原图'), undefined);
+      assert.match(container.textContent, /正在找回图片/);
+      return;
+    }
+    find('找回流港图片').click();
+    find('导入原图').click();
+    assert.equal(recovered.length, 1);
+    assert.equal(imported.length, 1);
+    assert.equal(generated.length, 0, '找回或导入不能触发生图');
+    if (mode === 'completed') {
+      assert.match(container.textContent, /找回：等回包 2 秒/);
+      assert.doesNotMatch(container.textContent, /用时/);
+    }
+    eligible = false;
+    store.setTag('tag-1', state);
+    assert.equal(find('找回流港图片'), undefined);
+    assert.equal(find('导入原图'), undefined);
+  });
 }
 
 test('慢收图的阶段用时在卡片显示，翻页更新且保持已挂载图片', t => {

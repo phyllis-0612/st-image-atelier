@@ -145,7 +145,11 @@ export function createApiClient({
   }
 
   function generate(input) {
-    const owner = input.provider === 'novelai' ? direct : selected();
+    const recovering = Boolean(input.recoveryTaskId || input.recoveryFile);
+    if (recovering && (direct.mode() !== 'direct' || input.provider !== 'openai')) {
+      throw new ApiError({ message: '找回图片和导入原图仅支持 GPT 免服务端直连模式' }, 400);
+    }
+    const owner = recovering || input.provider === 'novelai' ? direct : selected();
     attemptOwners.set(input.attemptId, owner);
     return owner.generate(input);
   }

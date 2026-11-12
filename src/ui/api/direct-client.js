@@ -15,6 +15,7 @@ import {
   generateImages,
   inspectBase64Image,
   listModelsDirect,
+  recoverFluxPortImages,
 } from './openai-direct.js';
 import { generateNovelAiImages } from './novelai-direct.js';
 import {
@@ -435,13 +436,15 @@ export function createDirectApiClient({
     return found;
   }
 
-  function receiveMessage({ bytes, receiving, waitMs, receiveMs, phase }) {
+  function receiveMessage({ bytes, receiving, waitMs, receiveMs, phase, speed, connection }) {
     if (!receiving) {
       // Status polls keep their own "queued" text; only the long generation request reports waiting.
       return phase === 'generate' && waitMs >= 5000 ? `中转站已接单，等待出图 · 已等 ${Math.round(waitMs / 1000)} 秒` : '';
     }
     if (bytes < 65_536) return '';
-    return `正在接收图片数据 · 已收 ${(bytes / 1048576).toFixed(1)} MB · 用时 ${Math.round(receiveMs / 1000)} 秒`;
+    const rate = typeof speed === 'number' ? ` · 当前 ${speed >= 1048576 ? `${(speed / 1048576).toFixed(1)} MB` : `${Math.round(speed / 1024)} KB`}/秒` : '';
+    return `正在接收图片数据${connection > 1 ? `（第 ${connection} 次连接）` : ''} · 已收 ${(bytes / 1048576).toFixed(2)} MB`
+      + ` · 用时 ${Math.round(receiveMs / 1000)} 秒${rate}`;
   }
 
   async function requestSt(path, body) {
@@ -557,7 +560,9 @@ export function createDirectApiClient({
       sourceType: source.sourceType === 'bytes' ? 'base64' : source.sourceType,
       status: 'available',
       storageMode: 'direct',
-      generationDurationMs: Math.max(0, Date.now() - Date.parse(attempt.createdAt)),
+      ...(attempt.recoveryTaskId ? { recoveredFromTask: true }
+        : attempt.importedImage ? { importedImage: true }
+        : { generationDurationMs: Math.max(0, Date.now() - Date.parse(attempt.createdAt)) }),
       createdAt: now(),
       favorite: false,
       compatibilityRetry: attempt.compatibilityRetry || null,
@@ -619,7 +624,9 @@ export function createDirectApiClient({
     if (provider === 'novelai' && !artistPreset) {
       throw new DirectError('PRESET_NOT_CONFIGURED', '找不到所选画师串预设');
     }
-    const apiKey = provider === 'novelai' ? getNovelAiKey() : getApiKey(preset.id);
+    const recoveryTaskId = input.recoveryTaskId;
+    const recoveryFile = input.recoveryFile;
+    const apiKey = recoveryFile ? '' : provider === 'novelai' ? getNovelAiKey() : getApiKey(preset.id);
     const settings = clone(namespace.settings);
     if (input.keepWaitingOnTimeout === true) settings.keepWaitingOnTimeout = true;
     await ensureGalleryReady();
@@ -627,8 +634,13 @@ export function createDirectApiClient({
     if (!found) throw new DirectError('VALIDATION_FAILED', '找不到对应的生图标签');
     loadAttempts(input.tagId);
     const existing = attemptIndex.get(input.attemptId)
-      || found.tag.attempts?.find(item => item.attemptId === input.attemptId);
+      || found.tag.attempts?.find(item => item.attemptId === input.attemptId)
+      || (recoveryTaskId && [...attemptIndex.values(), ...(found.tag.attempts || [])].find(item =>
+        item.tagId === input.tagId && item.recoveryTaskId === recoveryTaskId && ACTIVE_STATUSES.has(item.status)));
     if (existing) return clone({ ...existing, promptSnapshot: existing.promptSnapshot ?? found.tag.prompt });
+    const previousRecovery = recoveryTaskId && [...attemptIndex.values()].find(item =>
+      item.tagId === input.tagId && item.recoveryTaskId === recoveryTaskId && item.status === 'succeeded'
+      && item.resultIds?.length && item.resultIds.every(id => resultIndex.has(id)));
 
     const requestedSize = provider === 'novelai'
       ? (novelAi.ratioMap?.[input.parameters?.ratio] || novelAi.defaultSize)
@@ -638,6 +650,8 @@ export function createDirectApiClient({
       attemptId: input.attemptId,
       tagId: input.tagId,
       requestMode: input.requestMode,
+      ...(recoveryTaskId ? { recoveryTaskId, statusMessage: '正在读取流港原任务（不重新生图）…' } : {}),
+      ...(recoveryFile ? { importedImage: true, statusMessage: '正在读取原图文件…' } : {}),
       parallel: input.parallel === true,
       backupForAttemptId: input.backupForAttemptId || null,
       provider,
@@ -670,7 +684,8 @@ export function createDirectApiClient({
       found = await persistAttempt(found, attempt);
     } catch (error) {
       controllers.delete(attempt.attemptId);
-      throw new DirectError('LOCAL_SAVE_FAILED', `无法在扣费前保存防重复记录：${error.message}`);
+      const label = recoveryTaskId || recoveryFile ? '无法保存找回记录' : '无法在扣费前保存防重复记录';
+      throw new DirectError('LOCAL_SAVE_FAILED', `${label}：${error.message}`);
     }
 
     const saved = [];
@@ -691,7 +706,37 @@ export function createDirectApiClient({
         found = await persistAttempt(found, attempt, { defer: true });
         input.onProgress?.(clone(attempt));
       };
-      if (provider === 'novelai') {
+      const onPolling = async message => {
+        attempt.statusMessage = message;
+        found = await persistAttempt(found, attempt, { defer: true });
+        input.onProgress?.(clone(attempt));
+      };
+      const onReceive = progress => {
+        if (attempt.status !== 'generating' || controller.signal.aborted) return;
+        const message = receiveMessage(progress);
+        const at = Date.now();
+        // Screen only: a multi-megabyte body arrives in hundreds of chunks, so never write chat here.
+        if (!message || message === attempt.statusMessage || at - lastReceiveNotice < 1500) return;
+        lastReceiveNotice = at;
+        attempt.statusMessage = message;
+        input.onProgress?.(clone(attempt));
+      };
+      if (recoveryFile) {
+        // The user downloaded the original from the gateway: store it as this card's image, no request at all.
+        const fail = message => new DirectError('VALIDATION_FAILED', message, 400, false, message);
+        if (typeof recoveryFile.arrayBuffer !== 'function' || !Number.isFinite(recoveryFile.size) || recoveryFile.size < 1
+          || recoveryFile.size > settings.maxImageBytes) throw fail('请选择 30 MB 以内的 PNG、JPEG 或 WebP 原图');
+        const bytes = new Uint8Array(await recoveryFile.arrayBuffer());
+        if (bytes.byteLength !== recoveryFile.size || !detectImageType(bytes)) {
+          throw fail('文件不是可读取的 PNG、JPEG 或 WebP 图片');
+        }
+        sources = [{ sourceType: 'bytes', value: bytes, generationIndex: 0 }];
+      } else if (recoveryTaskId) {
+        sources = await recoverFluxPortImages({
+          preset, apiKey, taskId: recoveryTaskId, signal: controller.signal,
+          onPolling, onReceive, onTiming: timing => { transferTiming = timing; },
+        });
+      } else if (provider === 'novelai') {
         const generated = await generateNovelAiImages({
           config: { ...novelAi, negativePrompt: attempt.negativePromptSnapshot },
           apiKey,
@@ -719,21 +764,8 @@ export function createDirectApiClient({
           signal: controller.signal,
           onRetry,
           onTimeout,
-          onPolling: async message => {
-            attempt.statusMessage = message;
-            found = await persistAttempt(found, attempt, { defer: true });
-            input.onProgress?.(clone(attempt));
-          },
-          onReceive: progress => {
-            if (attempt.status !== 'generating' || controller.signal.aborted) return;
-            const message = receiveMessage(progress);
-            const at = Date.now();
-            // Screen only: a multi-megabyte body arrives in hundreds of chunks, so never write chat here.
-            if (!message || message === attempt.statusMessage || at - lastReceiveNotice < 1500) return;
-            lastReceiveNotice = at;
-            attempt.statusMessage = message;
-            input.onProgress?.(clone(attempt));
-          },
+          onPolling,
+          onReceive,
           onTiming: timing => { transferTiming = timing; },
           retryDelays,
           onCompatibilityRetry: async retry => {
@@ -744,6 +776,26 @@ export function createDirectApiClient({
           },
           onRequestParameters: parameters => Object.assign(attempt.parameters, parameters),
         });
+      }
+
+      // A repeat recovery is a fresh read/speed measurement, while reusing the existing local files.
+      // Keep these out of "saved": failure cleanup must never delete a previously saved image.
+      if (previousRecovery) {
+        const reused = previousRecovery.resultIds.map(id => ({
+          ...resultIndex.get(id),
+          ...(transferTiming ? { transferTiming: { ...transferTiming, saveMs: 0 } } : {}),
+        }));
+        attempt.status = 'succeeded';
+        attempt.statusMessage = null;
+        attempt.resultIds = reused.map(result => result.resultId);
+        attempt.completedAt = now();
+        const stored = { ...attempt };
+        if (stored.promptSnapshot === found.tag.prompt) delete stored.promptSnapshot;
+        const updated = await metadataStore.putGeneration(reused, stored);
+        for (const result of updated) resultIndex.set(result.resultId, result);
+        found = await persistAttempt(found, attempt, { alreadyStored: true });
+        input.onProgress?.(clone(attempt));
+        return clone(attempt);
       }
 
       attempt.status = 'downloading';

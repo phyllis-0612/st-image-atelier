@@ -3,7 +3,7 @@ import {
   stopNotice, stopNoticeMessage,
 } from '../../shared/openai-image-response.js';
 import { startGenerationTimeout } from '../../shared/generation-timeout.js';
-import { runGenerationWithRetry } from '../../shared/generation-retry.js';
+import { runGenerationWithRetry, waitForRetry } from '../../shared/generation-retry.js';
 
 const ERROR_MESSAGES = {
   PRESET_NOT_CONFIGURED: 'API 预设未配置',
@@ -159,7 +159,7 @@ function mapStatus(status, bodyText) {
 // returned at once: some gateways keep the connection open after the last byte, and `response.text()`
 // would then wait for an end of stream that never comes. Strings and brackets are tracked across
 // chunks so a multi-megabyte Base64 body is neither re-scanned nor re-parsed.
-async function readJsonBody(response, onReceive) {
+async function readJsonBody(response, onReceive, sink = {}) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const chunks = [];
@@ -177,6 +177,7 @@ async function readJsonBody(response, onReceive) {
       bytes += value?.byteLength || 0;
       const chunk = decoder.decode(value, { stream: !done });
       chunks.push(chunk);
+      if ((sink.head?.length || 0) < 8192) sink.head = ((sink.head || '') + chunk).slice(0, 8192);
       for (let index = 0; index < chunk.length; index++) {
         const char = chunk[index];
         if (inString) {
@@ -226,22 +227,54 @@ export async function fetchJson(url, options, timeoutMs, wait = {}) {
   let headersAt = 0;
   let receivedBytes = 0;
   let dataStartedAt = 0;
+  let stalled = false;
+  let watchdog;
+  const sink = {};
+  const samples = []; // [time, bytes] for the recent transfer speed
+  const speed = () => {
+    const now = Date.now();
+    while (samples.length > 2 && now - samples[1][0] >= 10_000) samples.shift();
+    const [since, base] = samples[0] || [now, receivedBytes];
+    return now - since >= 1000 ? Math.round((receivedBytes - base) * 1000 / (now - since)) : null;
+  };
   try {
     const response = await fetch(url, { ...options, signal: controller.signal, redirect: 'error' });
     if (response.ok && wait.streamBody && response.body?.getReader) {
       headersAt = Date.now();
       const report = (bytes, dataAt) => {
         receivedBytes = bytes;
+        if (dataAt && !dataStartedAt) samples.length = 0;
         dataStartedAt = dataAt;
+        samples.push([Date.now(), bytes]);
         wait.onReceive?.({
-          bytes, receiving: dataAt > 0,
+          bytes, receiving: dataAt > 0, speed: dataAt ? speed() : null,
           waitMs: (dataAt || Date.now()) - startedAt, receiveMs: dataAt ? Date.now() - dataAt : 0,
         });
       };
       report(0, 0);
+      if (wait.stallMs > 0) {
+        // Once the document has started, a transfer that all but stops will not finish: give up on
+        // this connection so the caller can read the task again instead of waiting forever.
+        let windowAt = 0;
+        let windowBytes = 0;
+        watchdog = setInterval(() => {
+          if (!dataStartedAt) return;
+          const now = Date.now();
+          if (now - dataStartedAt >= (wait.maxReceiveMs ?? 30 * 60_000)) {
+            controller.abort(new Error('receive-limit'));
+            return;
+          }
+          if (!windowAt) { windowAt = dataStartedAt; windowBytes = 0; }
+          if (now - windowAt < wait.stallMs) return;
+          if (receivedBytes - windowBytes < (wait.stallBytes ?? 32_768)) {
+            stalled = true;
+            controller.abort(new Error('stalled'));
+          } else { windowAt = now; windowBytes = receivedBytes; }
+        }, Math.min(1000, Math.max(10, wait.stallMs / 4)));
+      }
       let body;
       try {
-        body = await readJsonBody(response, report);
+        body = await readJsonBody(response, report, sink);
       } catch (error) {
         if (!(error instanceof SyntaxError)) throw error;
         throw imageError('UPSTREAM_RESPONSE_INVALID', `上游返回的不是完整的 JSON；上游响应：${responseDiagnostic(error.text || '', key)}`);
@@ -261,6 +294,14 @@ export async function fetchJson(url, options, timeoutMs, wait = {}) {
     }
   } catch (error) {
     if (error instanceof DirectError) throw error;
+    if (stalled && !externalSignal?.aborted) {
+      const seconds = Math.round((Date.now() - dataStartedAt) / 1000);
+      const message = `图片数据传输停滞（${seconds} 秒只收到 ${(receivedBytes / 1048576).toFixed(1)} MB）。`
+        + '回包未能继续传输，暂时无法确定原因；请核对中转站原任务，画笺不会重新生图';
+      // Reading a task again is safe; the generation POST itself is never sent twice.
+      throw Object.assign(new DirectError('DIRECT_FETCH_BLOCKED', message, 0, !wait.neverResend, message),
+        { stalled: true, receivedBytes, head: sink.head || '' });
+    }
     if (headersAt && wait.neverResend && !externalSignal?.aborted) {
       // The gateway accepted the job and started answering. Sending the POST again would draw (and
       // bill) a second image, so this is never retryable.
@@ -278,8 +319,112 @@ export async function fetchJson(url, options, timeoutMs, wait = {}) {
     }
     throw new DirectError('DIRECT_FETCH_BLOCKED', error?.message || 'Failed to fetch', 0, true);
   } finally {
+    clearInterval(watchdog);
     clearDeadline();
     externalSignal?.removeEventListener('abort', abort);
+  }
+}
+
+export function isFluxPortPreset(preset) {
+  try {
+    const url = new URL(preset?.baseUrl);
+    return url.protocol === 'https:' && !url.username && !url.password
+      && ['api.ai-media.vip', 'api.uselg.top'].includes(url.host);
+  } catch { return false; }
+}
+
+const TASK_ID = /^imgtask_[a-z0-9_-]{1,120}$/i;
+
+// The task is expected to be finished already: ask at once, and only pace the queries after that.
+function promptPolling() {
+  let asked = false;
+  return (ms, signal) => {
+    if (asked) return waitForRetry(ms, signal);
+    asked = true;
+    return Promise.resolve();
+  };
+}
+const STALL_LIMIT = 3;
+
+// Shared by generation and recovery: streamed reads with progress, timing, and stall handling.
+// A stalled or interrupted read is repeated on a new connection up to STALL_LIMIT times in total;
+// it only ever reads the original task and never submits a new generation.
+function taskReader({ apiKey, onReceive, stallMs }) {
+  const timing = { waitMs: 0, receiveMs: 0, receiveBytes: 0 };
+  let stalls = 0;
+  const track = (phase, touch) => {
+    let reported = 0;
+    return {
+      streamBody: true,
+      ...(stallMs > 0 ? { stallMs } : {}),
+      onReceive: progress => {
+        // Tell the resolver the picture is still arriving, so a slow but moving download is not cut off.
+        if (progress.receiving && progress.bytes - reported >= 262_144) { reported = progress.bytes; touch?.(); }
+        onReceive?.({ ...progress, phase, connection: stalls + 1 });
+      },
+      onTiming: ({ receiveMs, bytes }) => {
+        // Small status answers are part of waiting for the gateway; only image-sized bodies count as receiving.
+        if (bytes < 65_536) return;
+        timing.receiveMs += receiveMs;
+        timing.receiveBytes += bytes;
+      },
+    };
+  };
+  function noteStall(error) {
+    if (!error?.stalled) return error;
+    stalls += 1;
+    if (stalls < STALL_LIMIT) return error;
+    const message = `连续 ${STALL_LIMIT} 次连接都在传输中停滞（最后一次只收到 ${(error.receivedBytes / 1048576).toFixed(1)} MB）。`
+      + '画笺已停止，不会重新生图；请核对中转站原任务。'
+      + '可换 API 域名或开代理后点「找回流港图片」，或从后台下载原图后点「导入原图」';
+    return Object.assign(new DirectError('DIRECT_FETCH_BLOCKED', message, 0, false, message), { stalled: true });
+  }
+  const query = async (url, signal, { result = false, touch } = {}) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await fetchJson(url, {
+          method: 'GET', headers: authorization(apiKey), signal, credentials: 'omit',
+        }, 0, track(result ? 'result' : 'poll', touch));
+      } catch (caught) {
+        const error = noteStall(caught);
+        if (!result || signal?.aborted || attempt >= 2 || !error.retryable
+          || !['DIRECT_FETCH_BLOCKED', 'UPSTREAM_TIMEOUT'].includes(error.code)) throw error;
+      }
+    }
+  };
+  return { timing, track, query, noteStall };
+}
+
+// Reads one finished FluxPort task again by ID. Read-only: nothing is generated or billed.
+export async function recoverFluxPortImages({
+  preset, apiKey, taskId, signal, onPolling, onReceive, onTiming, stallMs = 45_000, sleep,
+}) {
+  const fail = (code, message, status) => new DirectError(code, message, status, false, message);
+  if (!isFluxPortPreset(preset)) throw fail('VALIDATION_FAILED', '请切换到生成这张图时使用的流港预设');
+  if (!TASK_ID.test(taskId || '')) throw fail('VALIDATION_FAILED', '请输入完整的流港图片任务 ID（imgtask_ 开头）');
+  if (!apiKey) throw fail('API_KEY_MISSING', '当前流港预设未保存 Key');
+  const endpoint = new URL('/v1/images/generations', preset.baseUrl).href;
+  const reader = taskReader({ apiKey, onReceive, stallMs });
+  const startedAt = Date.now();
+  try {
+    const sources = await resolveImageResponse({ task_id: taskId, execution_mode: 'async', assets: [] }, {
+      endpoint, apiKey, signal, preferInline: true, makeError: imageError,
+      deadline: startedAt + 180_000, request: reader.query, sleep: sleep || promptPolling(),
+      onPolling: () => onPolling?.('正在读取流港原任务（不重新生图）…'),
+    });
+    reader.timing.waitMs = Math.max(0, Date.now() - startedAt - reader.timing.receiveMs);
+    onTiming?.({ ...reader.timing });
+    return prepareImageDownloads(sources, endpoint, apiKey);
+  } catch (error) {
+    if (signal?.aborted || error.stalled || !(error instanceof DirectError)) throw error;
+    const status = error.status;
+    const hint = status === 401 || status === 403 ? '请确认当前预设使用的是生成这张图的 Key'
+      : status === 404 ? '流港没有找到这个任务，请核对任务 ID 和 Key'
+      : error.code === 'UPSTREAM_TIMEOUT' ? '等候超过 3 分钟仍未取到。可从流港后台下载原图，再点「导入原图」'
+      : error.code === 'DIRECT_FETCH_BLOCKED' ? '浏览器没能读到流港的任务结果，请检查网络；也可从后台下载原图后「导入原图」'
+      : '';
+    if (!hint) throw error;
+    throw fail(error.code, `找回图片失败${status > 0 && status !== 504 ? `（HTTP ${status}）` : ''}：${hint}`, status);
   }
 }
 
@@ -330,6 +475,7 @@ export async function generateImages({
   onRequestParameters,
   onReceive,
   onTiming,
+  stallMs = 45_000,
 }) {
   if (!preset.baseUrl) throw new DirectError('PRESET_NOT_CONFIGURED');
   if (!apiKey) throw new DirectError('API_KEY_MISSING');
@@ -361,17 +507,9 @@ export async function generateImages({
   let submittedAt;
 
   const keepWaiting = settings?.keepWaitingOnTimeout !== false;
-  const timing = { waitMs: 0, receiveMs: 0, receiveBytes: 0 };
-  const track = phase => ({
-    streamBody: true,
-    onReceive: progress => onReceive?.({ ...progress, phase }),
-    onTiming: ({ receiveMs, bytes }) => {
-      // Small status answers are part of waiting for the gateway; only image-sized bodies count as receiving.
-      if (bytes < 65_536) return;
-      timing.receiveMs += receiveMs;
-      timing.receiveBytes += bytes;
-    },
-  });
+  // Only FluxPort lets a finished task be read again, so only there is a stalled transfer abandoned.
+  const fluxPort = isFluxPortPreset(preset);
+  const { timing, track, query, noteStall } = taskReader({ apiKey, onReceive, stallMs: fluxPort ? stallMs : 0 });
   const request = payloadBody => {
     submittedAt = Date.now();
     onRequestParameters?.({ size: payloadBody.size ?? null, quality: payloadBody.quality ?? null });
@@ -382,42 +520,48 @@ export async function generateImages({
       signal,
     }, preset.timeoutMs, { keepWaiting, onTimeout, neverResend: true, ...track('generate') });
   };
-  // Reading a task is free and safe to repeat; a download cut off mid-way is tried again, never redrawn.
-  const query = async (url, pollSignal, { result = false } = {}) => {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await fetchJson(url, {
-          method: 'GET', headers: authorization(apiKey), signal: pollSignal,
-        }, 0, track(result ? 'result' : 'poll'));
-      } catch (error) {
-        if (!result || pollSignal?.aborted || attempt >= 2
-          || !['DIRECT_FETCH_BLOCKED', 'UPSTREAM_TIMEOUT'].includes(error.code)) throw error;
-      }
-    }
-  };
   let compatibilityRetry;
   try {
-    const payload = await runGenerationWithRetry({
-      request: () => request(body),
-      enabled: !fluxPortAsync && settings?.enableSmartRetry === true,
-      signal, onRetry, retryDelays,
-      recover: async error => {
-        if (compatibilityRetry) return null;
-        const retry = detectCompatibilityRetry(error, body);
-        if (!retry) return null;
-        compatibilityRetry = retry;
-        for (const parameter of retry.adjustedParameters) delete body[parameter];
-        await onCompatibilityRetry?.(retry);
-        return retry;
-      },
-    });
+    let rereading = false;
+    let payload;
+    try {
+      payload = await runGenerationWithRetry({
+        request: () => request(body),
+        enabled: !fluxPortAsync && settings?.enableSmartRetry === true,
+        signal, onRetry, retryDelays,
+        recover: async error => {
+          if (compatibilityRetry) return null;
+          const retry = detectCompatibilityRetry(error, body);
+          if (!retry) return null;
+          compatibilityRetry = retry;
+          for (const parameter of retry.adjustedParameters) delete body[parameter];
+          await onCompatibilityRetry?.(retry);
+          return retry;
+        },
+      });
+    } catch (caught) {
+      if (!caught?.stalled) throw caught;
+      // The answer stalled part-way. If its opening lines name the task, read that task again on a
+      // new connection; the generation request itself is never repeated.
+      noteStall(caught);
+      const taskId = /"(?:task_id|taskId|id)"\s*:\s*"(imgtask_[a-z0-9_-]{1,120})"/i.exec(caught.head || '')?.[1];
+      delete caught.head;
+      if (!taskId) {
+        caught.message += '。可到中转站后台复制任务 ID 后点「找回流港图片」，或下载原图后点「导入原图」';
+        throw caught;
+      }
+      rereading = true;
+      payload = { task_id: taskId, execution_mode: 'async', assets: [] };
+    }
     const timeoutMs = Number(preset.timeoutMs) || 180_000;
     const sources = await resolveImageResponse(payload, {
-      endpoint, apiKey, signal, onPolling, preferInline: body.response_format === 'b64_json',
-      deadline: submittedAt + timeoutMs,
+      endpoint, apiKey, signal, preferInline: body.response_format === 'b64_json',
+      onPolling: message => onPolling?.(rereading ? '回包传输停滞，正在换一条连接读取原任务（不重新生图）' : message),
+      deadline: rereading ? Date.now() + 180_000 : submittedAt + timeoutMs,
       keepWaiting, onDeadline: () => onTimeout?.(timeoutMs),
       makeError: imageError,
       request: query,
+      ...(rereading ? { sleep: promptPolling() } : {}),
     });
     timing.waitMs = Math.max(0, Date.now() - submittedAt - timing.receiveMs);
     onTiming?.({ ...timing });

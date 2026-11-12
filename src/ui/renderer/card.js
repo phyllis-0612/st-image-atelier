@@ -70,6 +70,10 @@ export function createCard({
   getState,
   getSettings = () => ({}),
   onGenerate,
+  onRecover,
+  canRecover = () => false,
+  onImportOriginal,
+  canImportOriginal = () => false,
   onAdjustRegenerate,
   onOpenGallery,
   onOpenSettings,
@@ -150,7 +154,15 @@ export function createCard({
     return button('删除', 'stia-button--ghost stia-card__remove', () => onRemove(tag), '×');
   }
 
-  function pendingControls(attempts, { showRoll = true } = {}) {
+  // 找回 reads a finished gateway task again; 导入 stores a file the user downloaded. Neither generates.
+  function recoveryButtons({ recover, importOriginal }) {
+    const buttons = [];
+    if (recover) buttons.push(button('找回流港图片', 'stia-button--ghost', () => onRecover(tag), '⇩'));
+    if (importOriginal) buttons.push(button('导入原图', 'stia-button--ghost', () => onImportOriginal(tag), '↑'));
+    return buttons;
+  }
+
+  function pendingControls(attempts, { showRoll = true, recovery = {} } = {}) {
     const pending = document.createElement('div');
     pending.className = 'stia-card__pending';
     const hint = document.createElement('small');
@@ -161,6 +173,7 @@ export function createCard({
     actions.className = 'stia-actions stia-actions--fill';
     if (showRoll) actions.append(button('并行重 roll', 'stia-button--primary', () => onGenerate(tag, 'manual'), '↻'));
     if (onOpenSettings) actions.append(button('换 Key / 预设', 'stia-button--ghost', onOpenSettings, '⚙'));
+    actions.append(...recoveryButtons(recovery));
     pending.append(actions);
     for (const attempt of attempts) {
       const row = document.createElement('div');
@@ -211,6 +224,11 @@ export function createCard({
       || latest?.negativePromptSnapshot
       || attempt?.negativePromptSnapshot
       || '';
+    const recoveringNow = activeAttempts.some(item => item.recoveryTaskId || item.importedImage);
+    const recovery = {
+      recover: typeof onRecover === 'function' && canRecover() && !recoveringNow,
+      importOriginal: typeof onImportOriginal === 'function' && canImportOriginal() && !recoveringNow,
+    };
     const canAdjust = getSettings()?.enablePromptOverrideRegenerate === true
       && typeof onAdjustRegenerate === 'function';
     const metadataAttempt = latest
@@ -218,7 +236,7 @@ export function createCard({
       : attempt;
     const metadata = imageMetadata(latest, metadataAttempt);
     const duration = imageDuration(latest, metadataAttempt);
-    const breakdown = duration ? imageTimingBreakdown(latest) : '';
+    const breakdown = imageTimingBreakdown(latest);
     // Spell the stages out on the card only when fetching the finished image was the slow part.
     const slowTransfer = breakdown
       && (latest.transferTiming.receiveMs + (latest.transferTiming.saveMs || 0)) >= 20_000;
@@ -242,6 +260,7 @@ export function createCard({
         ? [mode, latest.resultId, imageSrc, actualPrompt, size, available.map(item => item.resultId), imageIndex, canAdjust, metadata, duration, breakdown]
         : [mode, attempt?.status, attempt?.model, attempt?.errorMessage, Boolean(attempt),
           size, ratioLabel, actualPrompt, canAdjust, Boolean(state.tag?.resultIds?.length)])
+      + JSON.stringify([recovery.recover, recovery.importOriginal])
       + JSON.stringify(activeAttempts.map(item => [item.attemptId, item.status, item.statusMessage, item.model, item.presetNameSnapshot, item.parameters?.size]));
     if (signature === renderedSignature) return;
     const promptOpen = root.querySelector?.('.stia-prompt')?.open || false;
@@ -265,7 +284,9 @@ export function createCard({
         isAutoQueue ? '◷' : '◌',
         isAutoQueue
           ? '自动排队中'
-          : (isRegenerating ? '正在重新生成…' : (STATUS_TEXT[activeAttempt.status] || '处理中')),
+          : (activeAttempt.importedImage ? '正在导入原图…'
+            : activeAttempt.recoveryTaskId ? '正在找回图片…'
+            : isRegenerating ? '正在重新生成…' : (STATUS_TEXT[activeAttempt.status] || '处理中')),
         isAutoQueue
           ? '等待当前生成任务完成'
           : (activeAttempts.length > 1 ? `${activeAttempts.length} 个生成任务并行，旧请求继续接图` : (activeAttempt.statusMessage || `${activeAttempt.model || '当前模型'} · ${size || '默认尺寸'}`)),
@@ -276,7 +297,7 @@ export function createCard({
         shimmer.className = 'stia-card__shimmer';
         body.append(shimmer);
       }
-      body.append(pendingControls(activeAttempts));
+      body.append(pendingControls(activeAttempts, { recovery }));
       root.append(body);
       renderedBody = body;
       renderedSignature = signature;
@@ -315,6 +336,12 @@ export function createCard({
         elapsed.textContent = `· 用时 ${duration}${slowTransfer ? ` · ${breakdown}` : ''}`;
         elapsed.title = '从本次任务开始到图片保存完成，包含上游等待、重试和下载时间'
           + (breakdown ? `。本次：${breakdown}` : '');
+        doneInfo.append(elapsed);
+      } else if (breakdown && latest.recoveredFromTask) {
+        // A recovered picture doubles as a read-only speed test of the line to the gateway.
+        const elapsed = document.createElement('span');
+        elapsed.className = 'stia-card__duration stia-muted';
+        elapsed.textContent = `· 找回：${breakdown}`;
         doneInfo.append(elapsed);
       }
       const history = document.createElement('span');
@@ -358,11 +385,12 @@ export function createCard({
       if (canAdjust) {
         actions.append(button('调整后重绘', '', adjustRegenerate, '✎'));
       }
+      if (!active) actions.append(...recoveryButtons(recovery));
       body.append(completion, info);
       const pages = pagination(available, imageIndex);
       if (pages) body.append(pages);
       body.append(actions, details());
-      if (active) body.append(pendingControls(activeAttempts, { showRoll: false }));
+      if (active) body.append(pendingControls(activeAttempts, { showRoll: false, recovery }));
       if (media.parentNode === root) {
         // 同一张图仍在原位置：仅替换文字与按钮，图片不摘下、不重写 src。
         renderedBody.replaceWith(body);
@@ -390,6 +418,7 @@ export function createCard({
         onGenerate(tag, 'manual');
       }, '↻'));
       if (canAdjust) actions.append(button('调整后重绘', '', adjustRegenerate, '✎'));
+      actions.append(...recoveryButtons(recovery));
       if (onRemove) actions.append(removeButton());
       body.append(actions, details());
       root.append(body);
@@ -416,6 +445,7 @@ export function createCard({
     actions.append(button(attempt ? '重新生成' : '生成图片', 'stia-button--primary', () => {
       onGenerate(tag, 'manual');
     }, '▧'));
+    actions.append(...recoveryButtons(recovery));
     if (onRemove) actions.append(removeButton());
     if (canAdjust && attempt) actions.append(button('调整后重绘', '', adjustRegenerate, '✎'));
     body.append(details(), actions);

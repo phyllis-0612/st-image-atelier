@@ -49,7 +49,9 @@ export function createGenerationRunner({ api, compat, store, uuid, runGalleryCle
     const preset = overrides.preset || store.state.preset;
     const presetId = overrides.presetId || preset?.id || 'default';
     const backup = normalizeBackupSettings(store.state.settings);
-    const useBackup = backup.enableBackupPreset && provider === 'openai'
+    const recoveryTaskId = overrides.recoveryTaskId;
+    const recoveryFile = overrides.recoveryFile;
+    const useBackup = !recoveryTaskId && !recoveryFile && backup.enableBackupPreset && provider === 'openai'
       && api.mode?.() === 'direct' && backup.backupPresetId && backup.backupPresetId !== presetId
       && !overrides.backupForAttemptId;
     let settled = false;
@@ -59,6 +61,8 @@ export function createGenerationRunner({ api, compat, store, uuid, runGalleryCle
       attemptId,
       tagId: tag.tagId,
       requestMode: mode,
+      ...(recoveryTaskId ? { recoveryTaskId, statusMessage: '正在读取流港原任务（不重新生图）…' } : {}),
+      ...(recoveryFile ? { importedImage: true, statusMessage: '正在读取原图文件…' } : {}),
       parallel,
       backupForAttemptId: overrides.backupForAttemptId || null,
       provider,
@@ -108,6 +112,8 @@ export function createGenerationRunner({ api, compat, store, uuid, runGalleryCle
         tagId: tag.tagId,
         attemptId,
         requestMode: mode,
+        ...(recoveryTaskId ? { recoveryTaskId } : {}),
+        ...(recoveryFile ? { recoveryFile } : {}),
         parallel,
         backupForAttemptId: overrides.backupForAttemptId || null,
         ...(useBackup || overrides.keepWaitingOnTimeout ? { keepWaitingOnTimeout: true } : {}),

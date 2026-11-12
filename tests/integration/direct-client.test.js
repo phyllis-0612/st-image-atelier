@@ -1169,3 +1169,76 @@ for (const inline of [true, false]) {
     ]);
   });
 }
+
+test('用原流港任务 ID 找回内嵌图：只读原任务、只保存一次，不发生图请求也不启动备用生图', async t => {
+  const f = await concurrentFixture(t, { setTimer: () => assert.fail('找回原图不能启动备用生成') });
+  const taskId = 'imgtask_example-1620';
+  const preset = await f.client.updatePreset({ baseUrl: 'https://api.uselg.top/v1', timeoutMs: 180000 });
+  await f.client.updateSettings({ enableBackupPreset: true, backupPresetId: 'backup' });
+  f.store.set({ preset, settings: await f.client.getSettings() });
+  const fetchBefore = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push([url, options.method]);
+    if (url === '/api/images/upload') {
+      assert.equal(options.headers.Authorization, undefined);
+      assert.equal(JSON.parse(options.body).image, PNG_BASE64);
+      return fetchBefore(url, options);
+    }
+    assert.equal(url, 'https://api.uselg.top/v1/images/tasks/' + taskId);
+    assert.equal(options.method, 'GET');
+    assert.equal(options.headers.Authorization, 'Bearer key-old');
+    return response(200, { status: 'success', result: { data: [{ b64_json: PNG_BASE64 }] }, padding: 'x'.repeat(70_000) });
+  };
+  const run = () => f.runner.generate(f.tag, 'manual', { recoveryTaskId: taskId, provider: 'openai' });
+  const first = await run();
+  assert.equal(first.status, 'succeeded');
+  assert.deepEqual((await run()).resultIds, first.resultIds);
+  assert.deepEqual(calls, [
+    ['https://api.uselg.top/v1/images/tasks/' + taskId, 'GET'],
+    ['/api/images/upload', 'POST'],
+    ['https://api.uselg.top/v1/images/tasks/' + taskId, 'GET'],
+  ]);
+  const { items } = await f.client.galleryMetadata();
+  assert.equal(items.length, 1);
+  assert.equal(items[0].recoveredFromTask, true);
+  assert.equal(items[0].generationDurationMs, undefined);
+  assert.ok(items[0].transferTiming.receiveBytes > 70_000, '找回同时记录收图大小和用时，可当作线路测速');
+});
+
+test('找回图片拒绝非流港预设和异常任务 ID，不发送上游请求', async t => {
+  const f = await concurrentFixture(t);
+  const overrides = { recoveryTaskId: 'imgtask_legit', provider: 'openai' };
+  assert.match((await f.runner.generate(f.tag, 'manual', overrides)).errorMessage, /流港预设/);
+  await f.client.updatePreset({ baseUrl: 'https://api.ai-media.vip/v1' });
+  const invalid = await f.runner.generate(f.tag, 'manual', { ...overrides, recoveryTaskId: '../not-a-task' });
+  assert.match(invalid.errorMessage, /完整的流港图片任务 ID/);
+  assert.equal(f.requests.length, 0);
+});
+
+test('导入本地原图只上传到酒馆，不读取 API Key 或请求上游', async t => {
+  const f = await concurrentFixture(t, { setTimer: () => assert.fail('导入原图不能启动备用生成') });
+  const preset = await f.client.updatePreset({ baseUrl: 'https://relay.example.com/v1' });
+  await f.client.clearSecret(preset.id);
+  await f.client.updateSettings({ enableBackupPreset: true, backupPresetId: 'backup' });
+  f.store.set({ preset, settings: await f.client.getSettings() });
+  const before = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = (url, options) => {
+    calls.push(url);
+    assert.equal(url, '/api/images/upload');
+    assert.equal(options.headers.Authorization, undefined);
+    assert.equal(JSON.parse(options.body).image, PNG_BASE64);
+    return before(url, options);
+  };
+  const run = file => f.runner.generate(f.tag, 'manual', { recoveryFile: file, provider: 'openai' });
+  const invalid = await run(new Blob(['not an image'], { type: 'image/png' }));
+  assert.match(invalid.errorMessage, /不是可读取/);
+  assert.deepEqual(calls, []);
+  const imported = await run(new Blob([Buffer.from(PNG_BASE64, 'base64')], { type: 'image/png' }));
+  assert.equal(imported.status, 'succeeded');
+  assert.deepEqual(calls, ['/api/images/upload']);
+  const { items } = await f.client.galleryMetadata();
+  assert.equal(items[0].importedImage, true);
+  assert.equal(items[0].generationDurationMs, undefined);
+});
