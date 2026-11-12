@@ -143,3 +143,36 @@ test('已经排队的旧卡片在执行前仍有最后一道防重复检查', as
     compat: {}, uuid: () => 'new' });
   await runner.generate({ tagId: 'tag', prompt: 'moonlight' }, 'auto');
 });
+
+for (const kind of ['starts', 'progresses', 'completes', 'already-started']) {
+  test('迟到的历史查询不能隐藏本轮自动任务：' + kind, async () => {
+    const tag = { tagId: 'tag', prompt: 'moonlight', ordinal: 0 };
+    const message = { is_user: false, mes: '<draw>moonlight</draw>',
+      extra: { stImageAtelier: { messageUuid: 'message', tags: [tag] } } };
+    const store = createStore();
+    store.state.settings = { enabled: true, autoGenerate: true };
+    const pending = { tagId: 'tag', tag, attempts: [{ attemptId: 'auto:tag', status: 'generating' }], results: [] };
+    if (kind === 'already-started' || kind === 'progresses') store.setTag('tag', pending);
+    let ready;
+    const started = new Promise(resolve => { ready = resolve; });
+    let reply;
+    const events = createMessageEvents({
+      compat: { chat: () => [message], currentChatId: () => 'chat', saveSoon() {} },
+      api: { resolveTags: () => { ready(); return new Promise(resolve => { reply = resolve; }); } },
+      store, renderer: { mount() {}, hasConnected: () => true },
+      autoQueue: { enqueue: () => assert.fail('已开始的任务不应重复排队') },
+    });
+    const processing = events.processMessage(0, { live: true });
+    await started;
+    const current = kind === 'completes'
+      ? { ...pending, attempts: [{ attemptId: 'auto:tag', status: 'succeeded' }],
+        results: [{ resultId: 'done', status: 'available' }] }
+      : { ...pending, attempts: [{ attemptId: 'auto:tag', status: 'generating', statusMessage: '已收 1 MB' }] };
+    if (kind !== 'already-started') store.setTag('tag', current);
+    reply([{ tagId: 'tag', tag, attempts: [], results: [] }]);
+    await processing;
+    const state = store.state.tagStates.get('tag');
+    assert.equal(state.attempts[0].status, kind === 'completes' ? 'succeeded' : 'generating');
+    if (kind === 'completes') assert.equal(state.results[0].resultId, 'done');
+  });
+}

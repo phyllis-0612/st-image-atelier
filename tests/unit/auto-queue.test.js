@@ -28,3 +28,24 @@ test('同一标签在排队或生成期间只会进入自动队列一次', async
   releases.shift()();
   await nextTurn();
 });
+
+test('等待的自动任务立即报告排队，并能在不提交请求的情况下取消', async () => {
+  let release;
+  const calls = [], changes = [];
+  const queue = createAutoQueue(async tag => {
+    calls.push(tag.tagId);
+    await new Promise(resolve => { release = resolve; });
+  }, {
+    onQueued: tag => changes.push('queued:' + tag.tagId),
+    onDequeued: tag => changes.push('dequeued:' + tag.tagId),
+  });
+  queue.enqueue({ tagId: 'a' });
+  queue.enqueue({ tagId: 'b' });
+  assert.deepEqual(changes, ['queued:a', 'dequeued:a', 'queued:b']);
+  assert.deepEqual(calls, ['a']);
+  assert.equal(queue.cancel('b'), true);
+  assert.equal(queue.cancel('a'), false, '运行中的任务仍走原 API 取消');
+  release();
+  await nextTurn();
+  assert.deepEqual(calls, ['a']);
+});

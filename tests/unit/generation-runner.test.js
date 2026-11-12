@@ -52,6 +52,16 @@ test('同标签可并行手动重 roll，旧任务进度不覆盖新任务，自
   assert.equal(f.runner.hasActive(f.tag.tagId), false);
 });
 
+test('旧的普通生成按钮被点击时，正在进行的任务不额外重发', async () => {
+  const f = setup();
+  const running = f.runner.generate(f.tag, 'auto');
+  await f.runner.generate(f.tag, 'manual', { requireIdle: true });
+  assert.equal(f.inputs.length, 1);
+  assert.match(f.notices[0][1], /已有任务/);
+  f.finish(f.inputs[0].attemptId);
+  await running;
+});
+
 test('新请求还没落盘时，旧请求的状态刷新不能清掉它的乐观记录', async () => {
   const f = setup();
   const old = f.runner.generate(f.tag, 'manual');

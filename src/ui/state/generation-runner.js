@@ -37,6 +37,10 @@ export function createGenerationRunner({ api, compat, store, uuid, runGalleryCle
   }
 
   async function generate(tag, mode, overrides = {}) {
+    if (overrides.requireIdle && hasActive(tag.tagId)) {
+      compat.notify?.('info', '这张卡片已有任务正在生成或排队；如需再画一张，请使用「并行重 roll」。', '画笺');
+      return;
+    }
     if (mode === 'auto' && (hasActive(tag.tagId)
       || hasGenerationHistory(tag, store.state.tagStates.get(tag.tagId)))) return;
     const parallel = hasActive(tag.tagId);

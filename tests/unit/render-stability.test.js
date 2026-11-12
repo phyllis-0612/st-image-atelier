@@ -4,6 +4,35 @@ import { JSDOM } from 'jsdom';
 import { createMessageRenderer } from '../../src/ui/renderer/message-renderer.js';
 import { createStore } from '../../src/ui/state/store.js';
 import { imageDuration } from '../../src/ui/media/image-metadata.js';
+import { mergeResolvedTagState } from '../../src/ui/state/generation-state.js';
+
+test('历史查询晚返回时仍显示生成动画；普通生成携带防重复标记', t => {
+  const { container, state, store, generated } = setup(t);
+  state.results = [];
+  state.tag.latestResultId = null;
+  state.attempts = [];
+  store.setTag('tag-1', state);
+  [...container.querySelectorAll('button')].find(button => button.textContent.includes('生成图片')).click();
+  assert.equal(generated[0][2].requireIdle, true);
+  const current = { ...state, attempts: [{ attemptId: 'auto:tag-1', status: 'generating', requestMode: 'auto' }] };
+  store.setTag('tag-1', current);
+  store.setTag('tag-1', mergeResolvedTagState(current, { ...state, attempts: [] }, state));
+  assert.ok(container.querySelector('.stia-card__shimmer'));
+  assert.match(container.textContent, /正在生成/);
+  assert.equal([...container.querySelectorAll('button')].some(button => button.textContent.includes('生成图片')), false);
+  [...container.querySelectorAll('button')].find(button => button.textContent.includes('并行重 roll')).click();
+  assert.notEqual(generated[1][2]?.requireIdle, true);
+});
+
+test('自动队列中的下一张卡片可见排队状态并可取消', t => {
+  const { container, state, store } = setup(t);
+  state.results = [];
+  state.tag.latestResultId = null;
+  state.attempts = [{ attemptId: 'queue:tag-1', requestMode: 'auto', status: 'queued' }];
+  store.setTag('tag-1', state);
+  assert.match(container.textContent, /自动排队中/);
+  assert.match(container.textContent, /取消排队/);
+});
 
 test('图片用时格式化秒、分和小时，旧图仅按对应任务补算，缺失或无效记录不显示', () => {
   for (const [milliseconds, expected] of [[0, '1秒'], [999, '1秒'], [59000, '59秒'],

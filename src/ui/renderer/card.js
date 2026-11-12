@@ -378,7 +378,7 @@ export function createCard({
       const actions = document.createElement('div');
       actions.className = 'stia-actions stia-actions--fill';
       actions.append(
-        button(active ? '并行重 roll' : '重新生成', '', () => onGenerate(tag, 'manual'), '↻'),
+        button(active ? '并行重 roll' : '重新生成', '', () => onGenerate(tag, 'manual', { requireIdle: !active }), '↻'),
         button('查看 / 保存', 'stia-button--square', openOriginal, '⌕'),
         button('画廊', 'stia-button--square', () => onOpenGallery(tag.tagId), '▦'),
       );
@@ -415,7 +415,7 @@ export function createCard({
       const actions = document.createElement('div');
       actions.className = 'stia-actions stia-actions--fill';
       actions.append(button('重试', 'stia-button--danger-soft', () => {
-        onGenerate(tag, 'manual');
+        onGenerate(tag, 'manual', { requireIdle: true });
       }, '↻'));
       if (canAdjust) actions.append(button('调整后重绘', '', adjustRegenerate, '✎'));
       actions.append(...recoveryButtons(recovery));
@@ -443,7 +443,7 @@ export function createCard({
     const actions = document.createElement('div');
     actions.className = 'stia-actions stia-actions--fill';
     actions.append(button(attempt ? '重新生成' : '生成图片', 'stia-button--primary', () => {
-      onGenerate(tag, 'manual');
+      onGenerate(tag, 'manual', { requireIdle: true });
     }, '▧'));
     actions.append(...recoveryButtons(recovery));
     if (onRemove) actions.append(removeButton());

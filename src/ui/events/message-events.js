@@ -1,6 +1,7 @@
 import { parseDrawTags, shouldProcessMessage } from '../parser/draw-parser.js';
 import { reconcileTagMetadata } from '../state/tag-identity.js';
 import { hasGenerationHistory } from '../state/tag-history.js';
+import { mergeResolvedTagState } from '../state/generation-state.js';
 
 const DOM_SETTLE_MS = 140;
 const SOURCE_SCAN_INTERVAL_MS = 1_500;
@@ -45,9 +46,13 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
     }));
     renderer.mount(messageId, tags);
     let historyLoaded = false;
+    const snapshots = new Map(tags.map(tag => [tag.tagId, store.state.tagStates?.get(tag.tagId)]));
     try {
       const resolved = await api.resolveTags(tags.map(tag => tag.tagId));
-      for (const value of resolved) store.setTag(value.tagId, value);
+      for (const value of resolved) {
+        store.setTag(value.tagId, mergeResolvedTagState(
+          store.state.tagStates?.get(value.tagId), value, snapshots.get(value.tagId)));
+      }
       historyLoaded = !resolved.some(value => value.historyUnavailable);
     } catch (error) {
       store.set({ serviceError: error });

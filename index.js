@@ -61,7 +61,20 @@ function uuid() {
 const generationRunner = createGenerationRunner({ api, compat, store, uuid, runGalleryCleanup });
 const { generate, refreshTag } = generationRunner;
 
-const autoQueue = createAutoQueue(generate);
+const autoQueue = createAutoQueue(generate, {
+  onQueued(tag) {
+    const current = store.state.tagStates.get(tag.tagId) || { tagId: tag.tagId, attempts: [], results: [] };
+    store.setTag(tag.tagId, { ...current, attempts: [{
+      attemptId: 'queue:' + tag.tagId, tagId: tag.tagId, requestMode: 'auto',
+      status: 'queued', statusMessage: '等待前面的自动生图任务完成', localQueue: true,
+    }, ...(current.attempts || [])] });
+  },
+  onDequeued(tag) {
+    const current = store.state.tagStates.get(tag.tagId);
+    if (current) store.setTag(tag.tagId, { ...current,
+      attempts: (current.attempts || []).filter(attempt => attempt.attemptId !== 'queue:' + tag.tagId) });
+  },
+});
 let panel;
 let promptOverrideDialog;
 const actions = {
@@ -106,6 +119,7 @@ const actions = {
     });
   },
   cancel: async attemptId => {
+    if (attemptId.startsWith('queue:') && autoQueue.cancel(attemptId.slice(6))) return;
     await api.cancel(attemptId);
     const entry = [...store.state.tagStates.values()]
       .find(value => value.attempts?.some(attempt => attempt.attemptId === attemptId));
