@@ -520,7 +520,7 @@ test('达到预设超时时取消进行中的 GET 查询', async () => {
   let queries = 0;
   let aborted = false;
   await assert.rejects(resolveImageResponse({ task_id: 'slow-task', assets: [] }, taskOptions({
-    deadline: Date.now() + 100,
+    deadline: Date.now() + 100, resultTimeoutMs: 50,
     request: async (_url, signal) => {
       queries++;
       return new Promise((_resolve, reject) => signal.addEventListener('abort', () => {

@@ -127,6 +127,34 @@ function setup(t, html = '<p>正文之前</p><draw>cat by a window</draw><p>正�
   return { dom, container, renderer, tag, state, store, generated, adjusted };
 }
 
+test('慢收图的阶段用时在卡片显示，翻页更新且保持已挂载图片', t => {
+  const { container, state, store } = setup(t);
+  addHistory(state, store);
+  const latest = state.results.at(-1);
+  latest.generationDurationMs = 250000;
+  latest.transferTiming = { waitMs: 118000, receiveMs: 131000,
+    receiveBytes: 6.2 * 1048576, saveMs: 1000 };
+  store.setTag('tag-1', state);
+  const card = container.querySelector('.stia-card');
+  const image = card.querySelector('img');
+  assert.match(card.querySelector('.stia-card__duration').textContent, /等回包 118 秒 · 收图 131 秒.*保存 1 秒/);
+  store.setTag('tag-1', structuredClone(state));
+  assert.equal(card.querySelector('img'), image);
+  previousPage(card);
+  assert.doesNotMatch(card.textContent, /收图 131 秒/);
+});
+
+test('快速收图只在用时提示里保留阶段统计，不增加卡片正文', t => {
+  const { container, state, store } = setup(t);
+  state.results[0].generationDurationMs = 120000;
+  state.results[0].transferTiming = { waitMs: 118000, receiveMs: 1000,
+    receiveBytes: 100000, saveMs: 1000 };
+  store.setTag('tag-1', state);
+  const duration = container.querySelector('.stia-card__duration');
+  assert.doesNotMatch(duration.textContent, /等回包/);
+  assert.match(duration.title, /等回包 118 秒/);
+});
+
 test('其他卡片状态、轮询和无关设置变化不修改已完成卡片的 DOM', t => {
   const { dom, container, state, store } = setup(t);
   const card = container.querySelector('.stia-card');

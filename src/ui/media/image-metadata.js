@@ -14,6 +14,18 @@ export function imageDuration(result, attempt) {
   return `${hours ? `${hours}小时` : ''}${minutes ? `${minutes}分` : ''}${remainder || !hours && !minutes ? `${remainder}秒` : ''}`;
 }
 
+// "等回包 118 秒 · 收图 131 秒（6.2 MB） · 保存 3 秒": shows which stage a slow image spent its time in.
+export function imageTimingBreakdown(result) {
+  const timing = result?.transferTiming;
+  const valid = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  if (!timing || !valid(timing.waitMs) || !valid(timing.receiveMs)) return '';
+  const seconds = value => `${Math.round(value / 1000)} 秒`;
+  const size = valid(timing.receiveBytes) && timing.receiveBytes > 0
+    ? `（${(timing.receiveBytes / 1048576).toFixed(1)} MB）` : '';
+  return `等回包 ${seconds(timing.waitMs)} · 收图 ${seconds(timing.receiveMs)}${size}`
+    + (valid(timing.saveMs) ? ` · 保存 ${seconds(timing.saveMs)}` : '');
+}
+
 // Use the image's saved snapshot; never infer old images from the active preset.
 export function imageMetadata(result = {}, attempt = {}) {
   const provider = result?.provider || attempt?.provider;

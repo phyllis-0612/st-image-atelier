@@ -1,4 +1,7 @@
-import { imageSources, prepareImageDownloads, preferFluxPortAsync, responseDiagnostic, resolveImageResponse } from '../../shared/openai-image-response.js';
+import {
+  imageSources, prepareImageDownloads, preferFluxPortAsync, responseDiagnostic, resolveImageResponse,
+  stopNotice, stopNoticeMessage,
+} from '../../shared/openai-image-response.js';
 import { startGenerationTimeout } from '../../shared/generation-timeout.js';
 import { runGenerationWithRetry } from '../../shared/generation-retry.js';
 
@@ -109,6 +112,12 @@ export function extractUpstreamError(bodyText) {
 }
 
 function mapStatus(status, bodyText) {
+  let halted = null;
+  try { halted = stopNotice(JSON.parse(bodyText)); } catch { /* Not JSON. */ }
+  if (halted) {
+    const message = `${stopNoticeMessage(halted)}（HTTP ${status}）`;
+    return new DirectError('UPSTREAM_HTTP_ERROR', message, status, false, message);
+  }
   const reason = extractUpstreamError(bodyText);
   if (status === 401 || status === 403) {
     return new DirectError(
@@ -146,6 +155,65 @@ function mapStatus(status, bodyText) {
   );
 }
 
+// Reads a JSON response as it arrives. `onReceive` reports progress, and a complete JSON document is
+// returned at once: some gateways keep the connection open after the last byte, and `response.text()`
+// would then wait for an end of stream that never comes. Strings and brackets are tracked across
+// chunks so a multi-megabyte Base64 body is neither re-scanned nor re-parsed.
+async function readJsonBody(response, onReceive) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks = [];
+  const stringSpecial = /["\\]/g;
+  let depth = 0;
+  let started = false;
+  let inString = false;
+  let escaped = false;
+  let bytes = 0;
+  let finished = false;
+  let dataAt = 0; // When the JSON document itself began; keep-alive padding before it is still waiting.
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      bytes += value?.byteLength || 0;
+      const chunk = decoder.decode(value, { stream: !done });
+      chunks.push(chunk);
+      for (let index = 0; index < chunk.length; index++) {
+        const char = chunk[index];
+        if (inString) {
+          if (escaped) { escaped = false; continue; }
+          stringSpecial.lastIndex = index;
+          const match = stringSpecial.exec(chunk);
+          if (!match) break;
+          index = match.index;
+          if (match[0] === '\\') escaped = true;
+          else inString = false;
+          continue;
+        }
+        if (!started) {
+          if (char === ' ' || char === '\t' || char === '\r' || char === '\n' || char === '\uFEFF') continue;
+          if (char !== '{' && char !== '[') throw Object.assign(new SyntaxError('not json'), { text: chunks.join('').slice(0, 6000) });
+          started = true;
+          dataAt = Date.now();
+        }
+        if (char === '"') inString = true;
+        else if (char === '{' || char === '[') depth++;
+        else if ((char === '}' || char === ']') && --depth === 0) {
+          finished = true;
+          // JSON.parse also rejects unexpected content after the document in this chunk.
+          return { payload: JSON.parse(chunks.join('')), bytes, dataAt };
+        }
+      }
+      if (done) throw Object.assign(new SyntaxError('incomplete json'), { text: chunks.join('').slice(0, 6000) });
+      onReceive?.(bytes, dataAt);
+    }
+  } finally {
+    // A stalled connection must not hold up the result while cancellation settles.
+    if (!finished) onReceive?.(bytes, dataAt);
+    void reader.cancel().catch(() => {});
+    try { reader.releaseLock(); } catch { /* Already released. */ }
+  }
+}
+
 export async function fetchJson(url, options, timeoutMs, wait = {}) {
   const controller = new AbortController();
   const clearDeadline = startGenerationTimeout({ controller, timeoutMs, ...wait });
@@ -153,21 +221,58 @@ export async function fetchJson(url, options, timeoutMs, wait = {}) {
   const abort = () => controller.abort(externalSignal.reason);
   if (externalSignal?.aborted) abort();
   else externalSignal?.addEventListener('abort', abort, { once: true });
+  const key = options.headers?.Authorization?.slice(7);
+  const startedAt = Date.now();
+  let headersAt = 0;
+  let receivedBytes = 0;
+  let dataStartedAt = 0;
   try {
     const response = await fetch(url, { ...options, signal: controller.signal, redirect: 'error' });
+    if (response.ok && wait.streamBody && response.body?.getReader) {
+      headersAt = Date.now();
+      const report = (bytes, dataAt) => {
+        receivedBytes = bytes;
+        dataStartedAt = dataAt;
+        wait.onReceive?.({
+          bytes, receiving: dataAt > 0,
+          waitMs: (dataAt || Date.now()) - startedAt, receiveMs: dataAt ? Date.now() - dataAt : 0,
+        });
+      };
+      report(0, 0);
+      let body;
+      try {
+        body = await readJsonBody(response, report);
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+        throw imageError('UPSTREAM_RESPONSE_INVALID', `上游返回的不是完整的 JSON；上游响应：${responseDiagnostic(error.text || '', key)}`);
+      }
+      wait.onTiming?.({ headersMs: body.dataAt - startedAt, receiveMs: Date.now() - body.dataAt, bytes: body.bytes });
+      return body.payload;
+    }
     const text = await response.text();
     if (!response.ok) {
-      const key = options.headers?.Authorization?.slice(7);
       const safeText = key ? text.split(key).join('[已隐藏密钥]') : text;
-      throw mapStatus(response.status, safeText.slice(0, 1000));
+      throw mapStatus(response.status, safeText);
     }
     try {
       return JSON.parse(text);
     } catch {
-      throw imageError('UPSTREAM_RESPONSE_INVALID', `上游返回的不是 JSON；上游响应：${responseDiagnostic(text, options.headers?.Authorization?.slice(7))}`);
+      throw imageError('UPSTREAM_RESPONSE_INVALID', `上游返回的不是 JSON；上游响应：${responseDiagnostic(text, key)}`);
     }
   } catch (error) {
     if (error instanceof DirectError) throw error;
+    if (headersAt && wait.neverResend && !externalSignal?.aborted) {
+      // The gateway accepted the job and started answering. Sending the POST again would draw (and
+      // bill) a second image, so this is never retryable.
+      const megabytes = (receivedBytes / 1048576).toFixed(1);
+      const seconds = Math.round((Date.now() - (dataStartedAt || headersAt)) / 1000);
+      const message = (dataStartedAt
+        ? `中转站已应答，但图片数据没有收完（${seconds} 秒收到 ${megabytes} MB 后中断）。`
+        : `中转站已接单，但连接在等待出图 ${seconds} 秒后中断，没有收到图片数据。`)
+        + '当前无法确认生成结果，请先到中转站后台查看，不要急着重绘';
+      throw new DirectError(controller.signal.aborted ? 'UPSTREAM_TIMEOUT' : 'DIRECT_FETCH_BLOCKED',
+        message, controller.signal.aborted ? 504 : 0, false, message);
+    }
     if (controller.signal.aborted) {
       throw new DirectError('UPSTREAM_TIMEOUT', '请求已超时或取消', 504, true);
     }
@@ -223,6 +328,8 @@ export async function generateImages({
   onTimeout,
   onPolling,
   onRequestParameters,
+  onReceive,
+  onTiming,
 }) {
   if (!preset.baseUrl) throw new DirectError('PRESET_NOT_CONFIGURED');
   if (!apiKey) throw new DirectError('API_KEY_MISSING');
@@ -253,6 +360,18 @@ export async function generateImages({
   const fluxPortAsync = preferFluxPortAsync(endpoint, body);
   let submittedAt;
 
+  const keepWaiting = settings?.keepWaitingOnTimeout !== false;
+  const timing = { waitMs: 0, receiveMs: 0, receiveBytes: 0 };
+  const track = phase => ({
+    streamBody: true,
+    onReceive: progress => onReceive?.({ ...progress, phase }),
+    onTiming: ({ receiveMs, bytes }) => {
+      // Small status answers are part of waiting for the gateway; only image-sized bodies count as receiving.
+      if (bytes < 65_536) return;
+      timing.receiveMs += receiveMs;
+      timing.receiveBytes += bytes;
+    },
+  });
   const request = payloadBody => {
     submittedAt = Date.now();
     onRequestParameters?.({ size: payloadBody.size ?? null, quality: payloadBody.quality ?? null });
@@ -261,7 +380,20 @@ export async function generateImages({
       headers: { 'Content-Type': 'application/json', ...authorization(apiKey) },
       body: JSON.stringify(payloadBody),
       signal,
-    }, preset.timeoutMs, { keepWaiting: settings?.keepWaitingOnTimeout !== false, onTimeout });
+    }, preset.timeoutMs, { keepWaiting, onTimeout, neverResend: true, ...track('generate') });
+  };
+  // Reading a task is free and safe to repeat; a download cut off mid-way is tried again, never redrawn.
+  const query = async (url, pollSignal, { result = false } = {}) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await fetchJson(url, {
+          method: 'GET', headers: authorization(apiKey), signal: pollSignal,
+        }, 0, track(result ? 'result' : 'poll'));
+      } catch (error) {
+        if (!result || pollSignal?.aborted || attempt >= 2
+          || !['DIRECT_FETCH_BLOCKED', 'UPSTREAM_TIMEOUT'].includes(error.code)) throw error;
+      }
+    }
   };
   let compatibilityRetry;
   try {
@@ -279,14 +411,16 @@ export async function generateImages({
         return retry;
       },
     });
+    const timeoutMs = Number(preset.timeoutMs) || 180_000;
     const sources = await resolveImageResponse(payload, {
       endpoint, apiKey, signal, onPolling, preferInline: body.response_format === 'b64_json',
-      deadline: submittedAt + (Number(preset.timeoutMs) || 180_000),
+      deadline: submittedAt + timeoutMs,
+      keepWaiting, onDeadline: () => onTimeout?.(timeoutMs),
       makeError: imageError,
-      request: (url, pollSignal) => fetchJson(url, {
-        method: 'GET', headers: authorization(apiKey), signal: pollSignal,
-      }, 0),
+      request: query,
     });
+    timing.waitMs = Math.max(0, Date.now() - submittedAt - timing.receiveMs);
+    onTiming?.({ ...timing });
     return prepareImageDownloads(sources, endpoint, apiKey);
   } catch (error) {
     if (compatibilityRetry) error.compatibilityRetry = compatibilityRetry;

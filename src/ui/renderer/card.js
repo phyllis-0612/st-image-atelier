@@ -1,5 +1,5 @@
 import { makeImageSaveable, openImageViewer } from '../media/image-viewer.js';
-import { imageMetadata, imageDuration } from '../media/image-metadata.js';
+import { imageMetadata, imageDuration, imageTimingBreakdown } from '../media/image-metadata.js';
 
 import { ACTIVE_STATUSES } from '../state/generation-state.js';
 
@@ -218,6 +218,10 @@ export function createCard({
       : attempt;
     const metadata = imageMetadata(latest, metadataAttempt);
     const duration = imageDuration(latest, metadataAttempt);
+    const breakdown = duration ? imageTimingBreakdown(latest) : '';
+    // Spell the stages out on the card only when fetching the finished image was the slow part.
+    const slowTransfer = breakdown
+      && (latest.transferTiming.receiveMs + (latest.transferTiming.saveMs || 0)) >= 20_000;
     const size = latest && (!activeAttempts.length || hasParallelWork)
       ? metadata.size : displaySize(attempt?.parameters?.size || '');
     const ratioLabel = {
@@ -235,7 +239,7 @@ export function createCard({
       ? [mode, attempt.attemptId, attempt.status, attempt.requestMode, attempt.statusMessage,
         attempt.model, size, Boolean(latest)]
       : mode === 'succeeded'
-        ? [mode, latest.resultId, imageSrc, actualPrompt, size, available.map(item => item.resultId), imageIndex, canAdjust, metadata, duration]
+        ? [mode, latest.resultId, imageSrc, actualPrompt, size, available.map(item => item.resultId), imageIndex, canAdjust, metadata, duration, breakdown]
         : [mode, attempt?.status, attempt?.model, attempt?.errorMessage, Boolean(attempt),
           size, ratioLabel, actualPrompt, canAdjust, Boolean(state.tag?.resultIds?.length)])
       + JSON.stringify(activeAttempts.map(item => [item.attemptId, item.status, item.statusMessage, item.model, item.presetNameSnapshot, item.parameters?.size]));
@@ -308,8 +312,9 @@ export function createCard({
       if (duration) {
         const elapsed = document.createElement('span');
         elapsed.className = 'stia-card__duration stia-muted';
-        elapsed.textContent = `· 用时 ${duration}`;
-        elapsed.title = '从本次任务开始到图片保存完成，包含上游等待、重试和下载时间';
+        elapsed.textContent = `· 用时 ${duration}${slowTransfer ? ` · ${breakdown}` : ''}`;
+        elapsed.title = '从本次任务开始到图片保存完成，包含上游等待、重试和下载时间'
+          + (breakdown ? `。本次：${breakdown}` : '');
         doneInfo.append(elapsed);
       }
       const history = document.createElement('span');

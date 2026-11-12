@@ -435,6 +435,15 @@ export function createDirectApiClient({
     return found;
   }
 
+  function receiveMessage({ bytes, receiving, waitMs, receiveMs, phase }) {
+    if (!receiving) {
+      // Status polls keep their own "queued" text; only the long generation request reports waiting.
+      return phase === 'generate' && waitMs >= 5000 ? `中转站已接单，等待出图 · 已等 ${Math.round(waitMs / 1000)} 秒` : '';
+    }
+    if (bytes < 65_536) return '';
+    return `正在接收图片数据 · 已收 ${(bytes / 1048576).toFixed(1)} MB · 用时 ${Math.round(receiveMs / 1000)} 秒`;
+  }
+
   async function requestSt(path, body) {
     const response = await fetch(path, {
       method: 'POST',
@@ -667,6 +676,8 @@ export function createDirectApiClient({
     const saved = [];
     try {
       let sources;
+      let lastReceiveNotice = 0;
+      let transferTiming = null;
       const onTimeout = async timeoutMs => {
         if (attempt.status !== 'generating' || controller.signal.aborted) return;
         attempt.statusMessage = generationWaitMessage(timeoutMs);
@@ -713,6 +724,17 @@ export function createDirectApiClient({
             found = await persistAttempt(found, attempt, { defer: true });
             input.onProgress?.(clone(attempt));
           },
+          onReceive: progress => {
+            if (attempt.status !== 'generating' || controller.signal.aborted) return;
+            const message = receiveMessage(progress);
+            const at = Date.now();
+            // Screen only: a multi-megabyte body arrives in hundreds of chunks, so never write chat here.
+            if (!message || message === attempt.statusMessage || at - lastReceiveNotice < 1500) return;
+            lastReceiveNotice = at;
+            attempt.statusMessage = message;
+            input.onProgress?.(clone(attempt));
+          },
+          onTiming: timing => { transferTiming = timing; },
           retryDelays,
           onCompatibilityRetry: async retry => {
             attempt.compatibilityRetry = retry;
@@ -728,9 +750,15 @@ export function createDirectApiClient({
       attempt.statusMessage = null;
       found = await persistAttempt(found, attempt, { defer: true });
       input.onProgress?.(clone(attempt));
+      const savingSince = Date.now();
       for (const source of sources) {
         if (controller.signal.aborted) throw controller.signal.reason || new Error('cancelled');
         saved.push(await saveSource(source, input, attempt, controller.signal));
+      }
+      if (transferTiming) {
+        // Where the time went: waiting for the gateway, receiving its answer, then download + local save.
+        const timing = { ...transferTiming, saveMs: Date.now() - savingSince };
+        for (const result of saved) result.transferTiming = timing;
       }
 
       attempt.status = 'saving';

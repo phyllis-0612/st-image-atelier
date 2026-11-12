@@ -548,6 +548,8 @@ test('GPT 临时提示词覆盖只用于本次请求，保存快照且不改原�
   assert.equal(Number.isFinite(result.generationDurationMs), true);
   assert.ok(result.generationDurationMs >= 0);
   assert.ok(result.generationDurationMs <= Date.parse(attempt.completedAt) - Date.parse(attempt.createdAt));
+  // 各阶段用时随图片记录保存，慢图可以看出卡在等回包、收图还是保存。
+  for (const stage of ['waitMs', 'receiveMs', 'saveMs']) assert.ok(result.transferTiming[stage] >= 0, stage);
 
   await client.setFavorite(result.resultId, true);
   assert.equal((await client.galleryMetadata()).items[0].favorite, true);
@@ -555,6 +557,7 @@ test('GPT 临时提示词覆盖只用于本次请求，保存快照且不改原�
   const reloaded = createDirectApiClient(options);
   assert.equal((await reloaded.galleryMetadata()).items[0].favorite, true);
   assert.equal((await reloaded.galleryMetadata()).items[0].generationDurationMs, result.generationDurationMs);
+  assert.deepEqual((await reloaded.galleryMetadata()).items[0].transferTiming, result.transferTiming);
 });
 
 test('旧版单预设迁移为多预设，且每个预设独立保存密钥', async () => {

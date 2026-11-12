@@ -1,4 +1,5 @@
-// Keep the standalone Server Plugin copy in sync (see direct-adapter tests).
+// The standalone Server Plugin keeps its own copy (see direct-adapter tests). The 1.6.20 receive fixes
+// (result download budget, keep-waiting polls, uncertain results) are browser-direct only for now.
 const CONTAINERS = ['assets', 'images', 'data', 'result', 'output', 'response'];
 const LINKS = ['signed_url', 'url', 'image_url', 'image', 'asset_url', 'download_url'];
 const B64 = ['b64_json', 'base64', 'image_base64', 'b64'];
@@ -204,6 +205,37 @@ export function responseDiagnostic(payload, apiKey = '') {
   return text.length > 4000 ? text.slice(0, 4000) + '…［响应过长，后续已省略］' : text;
 }
 
+const UNCERTAIN = /^(uncertain|unknown|unconfirmed)$/i;
+
+// A gateway may say "the result is unknown, do not poll, do not resubmit". Returns the record when it does.
+export function stopNotice(payload, depth = 0) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || depth > 4) return null;
+  const state = String(payload.status ?? payload.state ?? payload.task_status ?? '').trim();
+  const code = String(payload.error_code ?? payload.code ?? payload.error?.code ?? '');
+  if (UNCERTAIN.test(state) || /uncertain/i.test(code)
+    || (payload.auto_poll === false && payload.retryable === false)) return payload;
+  for (const key of ['data', 'result', 'output', 'response', 'task', 'error']) {
+    const found = stopNotice(payload[key], depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+export function stopNoticeMessage(record, apiKey = '') {
+  const redact = value => {
+    let text = String(value || '');
+    if (apiKey) text = text.split(apiKey).join('[已隐藏密钥]');
+    return text.replace(/\bBearer\s+[^\s"',}]+/gi, 'Bearer [已隐藏]')
+      .replace(/\b(?:sk|key)-[A-Za-z0-9._-]{6,}\b/g, '[已隐藏密钥]');
+  };
+  const code = redact(record.error_code ?? record.code ?? record.error?.code ?? '').slice(0, 80);
+  const raw = record.error_message ?? record.message ?? record.detail ?? record.error?.message
+    ?? (typeof record.error === 'string' ? record.error : '');
+  const reason = redact(raw).replace(/\s+/g, ' ').trim().slice(0, 200);
+  return `中转站没能确认这次生图的结果${code ? `（${code}）` : ''}${reason ? `：${reason}` : ''}。`
+    + '站方要求不要自动查询或重发，画笺已停止；请先到中转站后台核对是否出图或扣费，再决定是否重绘';
+}
+
 function waitForPoll(ms, signal) {
   return new Promise((resolve, reject) => {
     const abort = () => { clearTimeout(timer); reject(signal.reason); };
@@ -215,6 +247,7 @@ function waitForPoll(ms, signal) {
 
 export async function resolveImageResponse(payload, {
   endpoint, apiKey, request, signal, deadline, onPolling, makeError, preferInline = false, sleep = waitForPoll,
+  keepWaiting = false, onDeadline, resultTimeoutMs = 180_000, maxWaitMs = 30 * 60_000,
 }) {
   const error = (code, message, status = 400, response = payload) =>
     makeError(code, `${message}；上游响应：${responseDiagnostic(response, apiKey)}`, status);
@@ -233,6 +266,8 @@ export async function resolveImageResponse(payload, {
   if (immediate.length && !preferFullInitial && !(fluxPort && asyncMode && initialStatus && !alreadyDone)) {
     return task ? immediate.map(item => ({ ...item, assetTaskId: task.id })) : immediate;
   }
+  const stopped = stopNotice(payload);
+  if (stopped) throw error('UPSTREAM_HTTP_ERROR', stopNoticeMessage(stopped, apiKey), 502);
   if (!task) throw error('UPSTREAM_RESPONSE_INVALID', '响应中没有可识别的图片');
   const id = typeof task.id === 'number' && Number.isSafeInteger(task.id) ? String(task.id) : task.id;
   if (typeof id !== 'string' || !/^[\w-][\w.:-]{0,255}$/.test(id)) {
@@ -253,20 +288,53 @@ export async function resolveImageResponse(payload, {
   if (signal?.aborted) abort();
   else signal?.addEventListener('abort', abort, { once: true });
   let last = payload;
-  const remaining = () => deadline - Date.now();
+  // `limit` is when the work in progress is abandoned. It starts as the preset deadline, which only
+  // covers queueing and drawing: a finished task always gets `resultTimeoutMs` to hand over its image.
+  let limit = deadline;
+  let timer;
+  let extended = false;
+  const remaining = () => limit - Date.now();
   const timeout = () => error('UPSTREAM_TIMEOUT', '中转站异步任务超过预设等待时间', 504, last);
-  const timer = setTimeout(() => controller.abort(timeout()), Math.max(0, remaining()));
+  // "Keep waiting" turns the preset deadline into a reminder, as it does for synchronous requests.
+  function keepGoing() {
+    if (!keepWaiting || extended || controller.signal.aborted) return false;
+    extended = true;
+    arm(Math.max(Date.now(), deadline) + maxWaitMs);
+    Promise.resolve().then(() => onDeadline?.()).catch(() => {});
+    return true;
+  }
+  let inFlightSince = 0;
+  function schedule(at) {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (keepGoing()) return;
+      // A query that is already under way may be carrying the finished image (some gateways answer
+      // the status query with the whole result), so it gets the result allowance before being cut.
+      const grace = inFlightSince ? inFlightSince + resultTimeoutMs : 0;
+      if (grace > Date.now()) schedule(grace);
+      else controller.abort(timeout());
+    }, Math.max(0, at - Date.now()));
+  }
+  function arm(at) {
+    limit = at;
+    schedule(at);
+  }
+  const expired = () => remaining() <= 0 && !keepGoing();
+  arm(deadline);
   async function finish(record, images, fetchedUrl) {
     const resultUrl = trustedTaskUrl(record?.result_url, base) ?? receiptResultUrl;
     const wantInline = preferTaskResult && images.some(item => item.sourceType === 'url');
     if (images.length && !wantInline) return withAssetTask(images);
 
     let result = last;
-    if (resultUrl && resultUrl.href !== fetchedUrl && remaining() > 0) {
+    if (resultUrl && resultUrl.href !== fetchedUrl) {
+      // The image exists now. Downloading it must not be cut short by time spent queueing and drawing.
+      // With links already in hand the inline copy is only an upgrade: never extend that wait further.
+      extended = true;
+      if (!controller.signal.aborted) arm(Date.now() + resultTimeoutMs);
       try {
-        result = await request(resultUrl.href, controller.signal);
+        result = await request(resultUrl.href, controller.signal, { result: true });
         if (controller.signal.aborted) throw controller.signal.reason;
-        if (remaining() <= 0) throw timeout();
       } catch (error) {
         // The summary already gave us usable links. An optional full result request must not lose them.
         if (images.length && !signal?.aborted) return withAssetTask(images);
@@ -285,30 +353,35 @@ export async function resolveImageResponse(payload, {
   }
 
   try {
-    if (remaining() <= 0) throw timeout();
-    if (controller.signal.aborted) throw controller.signal.reason;
+    // A finished task is collected even when its receipt arrived after the preset deadline.
     if (preferFullInitial || alreadyDone) return await finish(task.record, immediate, null);
+    if (expired()) throw timeout();
+    if (controller.signal.aborted) throw controller.signal.reason;
     await onPolling?.('中转站在后台排队画');
     const delayHint = record => Math.min(10_000, Math.max(2000, Number(record?.poll_after_ms) || 2000));
     for (let delay = delayHint(task.record); ; delay = Math.min(10_000, Math.max(Math.ceil(delay * 1.5), delayHint(last)))) {
-      if (remaining() <= 0) throw timeout();
-      await sleep(Math.min(delay, remaining()), controller.signal);
+      if (expired()) throw timeout();
+      await sleep(Math.max(0, Math.min(delay, remaining())), controller.signal);
       if (controller.signal.aborted) throw controller.signal.reason;
-      if (remaining() <= 0) throw timeout();
+      if (expired()) throw timeout();
+      inFlightSince = Date.now();
       try {
-        last = await request(url.toString(), controller.signal);
+        last = await request(url.toString(), controller.signal, { result: false });
       } catch (e) {
         if (controller.signal.aborted) throw controller.signal.reason;
         if (e.retryable) continue; // Retry the status query, never the generation POST.
         throw e;
+      } finally {
+        inFlightSince = 0;
       }
       if (controller.signal.aborted) throw controller.signal.reason;
-      if (remaining() <= 0) throw timeout();
       const record = taskEnvelope(last, true)?.record ?? last;
       if (FAILURE.test(status(record))) throw error('UPSTREAM_HTTP_ERROR', '中转站异步任务失败', 502, last);
       const images = imageSources(record?.assets, base.origin);
       if (DONE.test(status(record))) return await finish(record, images, url.href);
       if (images.length && (!fluxPort || !status(record))) return await finish(record, images, url.href);
+      const halted = stopNotice(last);
+      if (halted) throw error('UPSTREAM_HTTP_ERROR', stopNoticeMessage(halted, apiKey), 502, last);
       if (record?.auto_poll === false) {
         throw error('UPSTREAM_RESPONSE_INVALID', '中转站要求停止查询，请在中转站核对原任务，先不要重绘', 400, last);
       }
