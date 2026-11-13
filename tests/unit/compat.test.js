@@ -2,6 +2,39 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStCompat } from '../../src/ui/compat/st-api.js';
 import { createMessageEvents } from '../../src/ui/events/message-events.js';
+import { createStore } from '../../src/ui/state/store.js';
+
+for (const kind of ['late-draw', 'first-message', 'old-message']) {
+  test('回复完成与后续渲染分开发生时的自动触发：' + kind, async t => {
+    const oldDocument = globalThis.document, oldInterval = globalThis.setInterval;
+    globalThis.document = { querySelector: () => null };
+    globalThis.setInterval = () => 1;
+    t.after(() => { globalThis.document = oldDocument; globalThis.setInterval = oldInterval; });
+    const handlers = new Map(), queued = [];
+    const message = { is_user: false, mes: '正文还没插入画笺标签' };
+    const store = createStore();
+    store.state.settings = { enabled: true, autoGenerate: true };
+    const events = createMessageEvents({
+      compat: { on: (names, cb) => names.forEach(name => handlers.set(name, cb)),
+        chat: () => [message], currentChatId: () => 'chat', saveSoon() {} },
+      api: { resolveTags: async ids => ids.map(tagId => ({
+        tagId, tag: message.extra.stImageAtelier.tags.find(tag => tag.tagId === tagId),
+        attempts: [], results: [],
+      })) },
+      store, renderer: { mount() {}, hasConnected: () => true },
+      autoQueue: { enqueue: tag => queued.push(tag) },
+    });
+    events.bind();
+    await events.hydrate();
+    if (kind !== 'old-message') handlers.get('MESSAGE_RECEIVED')(0,
+      kind === 'first-message' ? 'first_message' : 'normal');
+    await new Promise(resolve => setTimeout(resolve, 180));
+    message.mes = '正文\n<draw>moonlight</draw>';
+    handlers.get('MESSAGE_RENDERED')(0);
+    await new Promise(resolve => setTimeout(resolve, 180));
+    assert.equal(queued.length, kind === 'late-draw' ? 1 : 0);
+  });
+}
 
 test('生图通知使用酒馆原生横幅并转义上游错误文本', () => {
   let args;

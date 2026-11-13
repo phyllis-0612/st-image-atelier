@@ -15,6 +15,10 @@ export function hasChangedDrawSource(message, previousSource) {
 export function createMessageEvents({ compat, api, store, renderer, autoQueue }) {
   const sourceCache = new Map();
   const scheduled = new Map();
+  // Remember a completed reply even when another extension inserts <draw> after its event.
+  // A plain DOM redraw never creates this permission for historical messages.
+  let liveReplies = new WeakMap();
+  let chatRevision = 0;
   let observer = null;
   let observedChat = null;
   let pollTimer = null;
@@ -24,6 +28,13 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
   async function processMessage(messageId, { live = false, generationType = '' } = {}) {
     const message = compat.chat()[Number(messageId)];
     if (!shouldProcessMessage(message)) return;
+    const chatId = compat.currentChatId();
+    const revision = chatRevision;
+    if (live) liveReplies.set(message, {
+      chatId, generationType: generationType || liveReplies.get(message)?.generationType || '',
+    });
+    const reply = liveReplies.get(message);
+    const eligibleReply = reply?.chatId === chatId ? reply : null;
     sourceCache.set(String(messageId), message.mes);
     const parsed = parseDrawTags(message.mes);
     if (!parsed.length) return;
@@ -49,6 +60,8 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
     const snapshots = new Map(tags.map(tag => [tag.tagId, store.state.tagStates?.get(tag.tagId)]));
     try {
       const resolved = await api.resolveTags(tags.map(tag => tag.tagId));
+      if (revision !== chatRevision || compat.currentChatId() !== chatId
+        || compat.chat()[Number(messageId)] !== message) return;
       for (const value of resolved) {
         store.setTag(value.tagId, mergeResolvedTagState(
           store.state.tagStates?.get(value.tagId), value, snapshots.get(value.tagId)));
@@ -63,10 +76,11 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
 
     const eligibleLiveMessage = store.state.settings.enabled
       && historyLoaded
-      && live
-      && generationType !== 'first_message'
+      && eligibleReply
+      && eligibleReply.generationType !== 'first_message'
       && store.state.settings.autoGenerate;
     if (eligibleLiveMessage) {
+      liveReplies.delete(message);
       for (const tag of tags.slice(0, 3)) {
         const current = store.state.tagStates.get(tag.tagId);
         if (!hasGenerationHistory(tag, current)) {
@@ -78,6 +92,10 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
 
   async function hydrate() {
     hydrated = false;
+    chatRevision++;
+    liveReplies = new WeakMap();
+    for (const item of scheduled.values()) clearTimeout(item.timer);
+    scheduled.clear();
     cachedChatId = compat.currentChatId();
     sourceCache.clear();
     const chat = compat.chat();
@@ -98,8 +116,10 @@ export function createMessageEvents({ compat, api, store, renderer, autoQueue })
       ...options,
       live: Boolean(previous?.options?.live || options.live),
     };
+    const chatId = compat.currentChatId();
     const timer = setTimeout(() => {
       scheduled.delete(id);
+      if (compat.currentChatId() !== chatId) return;
       void processMessage(id, mergedOptions).catch(error => {
         console.error('[画笺] 实时识别生图标签失败', error);
       });
