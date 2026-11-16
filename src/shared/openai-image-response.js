@@ -94,6 +94,13 @@ export function imageSources(payload, taskOrigin, includeAssets = true) {
     }
   }
   read(payload);
+  // A gateway may describe one picture twice: embedded in `data` and again as a download link in
+  // `assets`. The embedded copy is already here, so the links are dropped; fetching them as well
+  // would save the picture twice, and a blocked download would fail an image that had arrived.
+  const embedded = results.filter(item => item.sourceType === 'base64');
+  if (embedded.length && embedded.length < results.length) {
+    return embedded.map((item, generationIndex) => ({ ...item, generationIndex }));
+  }
   return results;
 }
 
@@ -118,11 +125,11 @@ function isFluxPort(url) {
   return url.protocol === 'https:' && ['api.uselg.top', 'api.ai-media.vip'].includes(url.host);
 }
 
+// Background (async) drawing is opt-in: add "async": true to the preset's extra request parameters.
+// By default the request is the plain synchronous one that 1.6.15 sent, which is what works for
+// most users; a gateway that still answers with a task receipt is followed either way.
 export function preferFluxPortAsync(endpoint, body) {
-  const url = new URL(endpoint);
-  if (isFluxPort(url) && url.pathname === '/v1/images/generations'
-    && !Object.hasOwn(body, 'async') && body.stream !== true) body.async = true;
-  return isFluxPort(url) && body.async === true;
+  return isFluxPort(new URL(endpoint)) && body.async === true;
 }
 
 function trustedTaskUrl(value, base) {

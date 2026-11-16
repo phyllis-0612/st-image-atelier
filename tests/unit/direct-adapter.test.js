@@ -572,10 +572,10 @@ test('流港优先用签名图链接，受保护的任务图片只允许使用�
   assert.deepEqual(items.map(item => imageDownloadAuthorization(item, endpoint, 'test-key')), [undefined, 'Bearer test-key', undefined]);
 });
 
-test('流港自动请求异步，只提交一次，显式同步配置保持原样', async t => {
+test('流港后台任务只提交一次；直连默认同步，增强模式默认异步，显式配置保持原样', async t => {
   const fetchBefore = globalThis.fetch;
   t.after(() => { globalThis.fetch = fetchBefore; });
-  for (const generate of [generateImages, serverImages.generate]) {
+  for (const [generate, automatic] of [[generateImages, undefined], [serverImages.generate, true]]) {
     const sent = [];
     globalThis.fetch = async (_url, init) => {
       sent.push(JSON.parse(init.body).async);
@@ -583,14 +583,19 @@ test('流港自动请求异步，只提交一次，显式同步配置保持原�
         : Response.json({ data: [{ b64_json: PNG_BASE64 }] });
     };
     const options = {
-      preset: { baseUrl: 'https://api.ai-media.vip/v1', generationPath: '/v1/images/generations', selectedModel: 'image', timeoutMs: 1000 },
+      preset: { baseUrl: 'https://api.ai-media.vip/v1', generationPath: '/v1/images/generations', selectedModel: 'image', timeoutMs: 1000,
+        extraBody: { async: true } },
       apiKey: 'test-key', prompt: 'a cat', parameters: {}, settings: { enableSmartRetry: true }, retryDelays: [0],
     };
+    // A background task may already be drawing: its submission is never repeated.
     await assert.rejects(generate(options));
     assert.deepEqual(sent, [true]);
     const [image] = await generate({ ...options, preset: { ...options.preset, extraBody: { async: false } } });
     assert.equal(image.value, PNG_BASE64);
     assert.deepEqual(sent, [true, false]);
+    const [plain] = await generate({ ...options, preset: { ...options.preset, extraBody: {} } });
+    assert.equal(plain.value, PNG_BASE64);
+    assert.deepEqual(sent, [true, false, automatic]);
   }
 });
 

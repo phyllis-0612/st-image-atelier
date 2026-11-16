@@ -197,7 +197,7 @@ test('异步取图中途断流只重读原任务，生图请求始终只提交�
     return streamed([big.slice(0, 30_000), big.slice(30_000)], { gapMs: 10 });
   };
   const sources = await generateImages({
-    preset: preset(), apiKey: 'test-key', prompt: 'a cat', parameters: {}, settings: {},
+    preset: preset({ extraBody: { async: true } }), apiKey: 'test-key', prompt: 'a cat', parameters: {}, settings: {},
     onReceive: value => received.push(value), onTiming: value => { timing = value; },
   });
   assert.equal(sources[0].value, PNG_BASE64);
@@ -373,4 +373,47 @@ test('独立取图时限不会越过总等待上限', async () => {
   }, options({ maxWaitMs: 60, resultTimeoutMs: 2000, keepWaiting: true,
     request: (_url, signal) => untilAbort(signal),
   })), error => error.code === 'UPSTREAM_TIMEOUT');
+});
+
+test('流港默认发送与 1.6.15 相同的同步请求；内嵌图到手后不再发任何查询或下载链接', async t => {
+  const fetchBefore = globalThis.fetch;
+  t.after(() => { globalThis.fetch = fetchBefore; });
+  const link = 'https://download.ai-media.vip/signed/1.png';
+  // 同一张图既内嵌在 data 里，又在 assets 里给了下载链接。
+  for (const reply of [
+    { created: 1, data: [{ b64_json: PNG_BASE64 }] },
+    { task_id: 'imgtask_1', execution_mode: 'sync', status: 'completed', data: [{ b64_json: PNG_BASE64 }],
+      assets: [{ signed_url: link, url: '/v1/images/tasks/imgtask_1/assets/image.png' }] },
+    { task_id: 'imgtask_1', execution_mode: 'sync', status: 'completed',
+      assets: [{ signed_url: link, b64_json: PNG_BASE64 }] },
+  ]) {
+    const calls = [];
+    globalThis.fetch = async (url, init) => {
+      calls.push([init.method, new URL(url).pathname, JSON.parse(init.body)]);
+      return Response.json(reply);
+    };
+    const sources = await generateImages({
+      preset: preset({ selectedModel: 'gpt-image' }), apiKey: 'test-key', prompt: 'a cat', parameters: {}, settings: {},
+    });
+    assert.deepEqual(sources.map(item => [item.sourceType, item.value]), [['base64', PNG_BASE64]]);
+    assert.deepEqual(calls, [['POST', '/v1/images/generations',
+      { model: 'gpt-image', prompt: 'a cat', response_format: 'b64_json' }]]);
+  }
+});
+
+test('站方把同步请求转成后台任务时照常跟进；只有链接时仍先取内嵌结果', async t => {
+  const fetchBefore = globalThis.fetch;
+  t.after(() => { globalThis.fetch = fetchBefore; });
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push(`${init.method} ${new URL(url).pathname}`);
+    if (init.method === 'POST') {
+      assert.equal('async' in JSON.parse(init.body), false);
+      return Response.json({ task_id: 'imgtask_1', execution_mode: 'async', status: 'queued', assets: [], poll_after_ms: 1 }, { status: 202 });
+    }
+    return Response.json(inline);
+  };
+  const sources = await generateImages({ preset: preset(), apiKey: 'test-key', prompt: 'a cat', parameters: {}, settings: {} });
+  assert.equal(sources[0].value, PNG_BASE64);
+  assert.deepEqual(calls, ['POST /v1/images/generations', 'GET /v1/images/tasks/imgtask_1']);
 });

@@ -1124,7 +1124,7 @@ for (const [name, patch, parameters, expected] of [
 for (const inline of [true, false]) {
   test(inline ? '流港摘要有链接时仍查询完整结果，直接保存 b64' : '流港签名图下载失败后改用同任务的受保护图，不重新生成', async t => {
     const f = await concurrentFixture(t);
-    await f.client.updatePreset({ baseUrl: 'https://api.ai-media.vip/v1', timeoutMs: 6000 });
+    await f.client.updatePreset({ baseUrl: 'https://api.ai-media.vip/v1', timeoutMs: 6000, extraBody: { async: true } });
     const calls = [];
     const gateway = 'https://api.ai-media.vip';
     const task = '/v1/images/tasks/imgtask_FIXTURE';
