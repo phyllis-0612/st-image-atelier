@@ -1242,3 +1242,11 @@ test('导入本地原图只上传到酒馆，不读取 API Key 或请求上游',
   assert.equal(items[0].importedImage, true);
   assert.equal(items[0].generationDurationMs, undefined);
 });
+
+test('找回与导入的卡片入口默认关闭，开关只接受布尔值并持久化', async t => {
+  const f = await concurrentFixture(t);
+  assert.equal((await f.client.getSettings()).showRecoveryTools, false);
+  assert.equal((await f.client.updateSettings({ showRecoveryTools: true })).showRecoveryTools, true);
+  assert.equal((await f.client.getSettings()).showRecoveryTools, true);
+  assert.equal((await f.client.updateSettings({ showRecoveryTools: 'yes' })).showRecoveryTools, false);
+});

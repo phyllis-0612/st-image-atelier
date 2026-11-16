@@ -2,6 +2,7 @@ import { makeImageSaveable, openImageViewer } from '../media/image-viewer.js';
 import { imageMetadata, imageDuration, imageTimingBreakdown } from '../media/image-metadata.js';
 
 import { ACTIVE_STATUSES } from '../state/generation-state.js';
+import { iconMarkup } from './icons.js';
 
 const STATUS_TEXT = {
   queued: '排队中',
@@ -20,7 +21,9 @@ function button(label, className, handler, symbol = '') {
     const icon = document.createElement('span');
     icon.className = 'stia-button__icon';
     icon.setAttribute('aria-hidden', 'true');
-    icon.textContent = symbol;
+    const drawn = iconMarkup(symbol);
+    if (drawn) icon.innerHTML = drawn;
+    else icon.textContent = symbol;
     element.append(icon);
   }
   const text = document.createElement('span');
@@ -151,7 +154,7 @@ export function createCard({
   /* 一键删除：卡片、消息里的 <draw> 注入词、标签元数据一起清掉，不留痕迹。
      只在失败和待生成两种状态提供；已出图的走画廊删除，生成中的先取消。 */
   function removeButton() {
-    return button('删除', 'stia-button--ghost stia-card__remove', () => onRemove(tag), '×');
+    return button('删除', 'stia-button--ghost stia-card__remove', () => onRemove(tag), '🗑');
   }
 
   // 找回 reads a finished gateway task again; 导入 stores a file the user downloaded. Neither generates.
@@ -160,6 +163,26 @@ export function createCard({
     if (recover) buttons.push(button('找回流港图片', 'stia-button--ghost', () => onRecover(tag), '⇩'));
     if (importOriginal) buttons.push(button('导入原图', 'stia-button--ghost', () => onImportOriginal(tag), '↑'));
     return buttons;
+  }
+
+  // Rarely used actions sit behind one "更多" button so the card keeps two or three obvious choices.
+  // A single extra action is shown directly: a menu holding one item only costs a tap.
+  function moreActions(items) {
+    const extras = items.filter(Boolean);
+    if (extras.length < 2) return extras;
+    const menu = document.createElement('div');
+    menu.className = 'stia-card__more';
+    const list = document.createElement('div');
+    list.className = 'stia-card__more-list';
+    list.hidden = true;
+    list.append(...extras);
+    const toggle = button('更多', 'stia-button--quiet stia-card__more-toggle', () => {
+      list.hidden = !list.hidden;
+      toggle.setAttribute('aria-expanded', String(!list.hidden));
+    }, '⋯');
+    toggle.setAttribute('aria-expanded', 'false');
+    menu.append(toggle, list);
+    return [menu];
   }
 
   function pendingControls(attempts, { showRoll = true, recovery = {} } = {}) {
@@ -171,9 +194,11 @@ export function createCard({
     pending.append(hint);
     const actions = document.createElement('div');
     actions.className = 'stia-actions stia-actions--fill';
-    if (showRoll) actions.append(button('并行重 roll', 'stia-button--primary', () => onGenerate(tag, 'manual'), '↻'));
-    if (onOpenSettings) actions.append(button('换 Key / 预设', 'stia-button--ghost', onOpenSettings, '⚙'));
-    actions.append(...recoveryButtons(recovery));
+    if (showRoll) actions.append(button('并行重 roll', 'stia-card__act-main', () => onGenerate(tag, 'manual'), '↻'));
+    actions.append(...moreActions([
+      onOpenSettings && button('换 Key / 预设', 'stia-button--ghost', onOpenSettings, '⚙'),
+      ...recoveryButtons(recovery),
+    ]));
     pending.append(actions);
     for (const attempt of attempts) {
       const row = document.createElement('div');
@@ -357,9 +382,13 @@ export function createCard({
         dimensions.title = `尺寸：${metadata.size}`;
         historyInfo.append(dimensions);
       }
-      completion.append(doneInfo, historyInfo);
+      // The pager shares the status line, so nothing is drawn over the picture.
+      const pages = pagination(available, imageIndex);
+      completion.append(doneInfo);
+      if (pages) completion.append(pages);
       const info = document.createElement('div');
       info.className = 'stia-card__metadata';
+      info.append(historyInfo);
       for (const [kind, label, value] of [
         ['preset', '预设', metadata.presetName],
         ['quality', '画质', metadata.quality],
@@ -378,18 +407,15 @@ export function createCard({
       const actions = document.createElement('div');
       actions.className = 'stia-actions stia-actions--fill';
       actions.append(
-        button(active ? '并行重 roll' : '重新生成', '', () => onGenerate(tag, 'manual', { requireIdle: !active }), '↻'),
-        button('查看 / 保存', 'stia-button--square', openOriginal, '⌕'),
-        button('画廊', 'stia-button--square', () => onOpenGallery(tag.tagId), '▦'),
+        button(active ? '并行重 roll' : '重新生成', 'stia-button--primary stia-card__act-main', () => onGenerate(tag, 'manual', { requireIdle: !active }), '↻'),
+        button('查看 / 保存', 'stia-button--quiet', openOriginal, '⌕'),
+        button('画廊', 'stia-button--quiet', () => onOpenGallery(tag.tagId), '▦'),
       );
       if (canAdjust) {
-        actions.append(button('调整后重绘', '', adjustRegenerate, '✎'));
+        actions.append(button('调整后重绘', 'stia-card__act-adjust', adjustRegenerate, '✎'));
       }
-      if (!active) actions.append(...recoveryButtons(recovery));
-      body.append(completion, info);
-      const pages = pagination(available, imageIndex);
-      if (pages) body.append(pages);
-      body.append(actions, details());
+      if (!active) actions.append(...moreActions(recoveryButtons(recovery)));
+      body.append(completion, info, actions, details());
       if (active) body.append(pendingControls(activeAttempts, { showRoll: false, recovery }));
       if (media.parentNode === root) {
         // 同一张图仍在原位置：仅替换文字与按钮，图片不摘下、不重写 src。
@@ -414,12 +440,15 @@ export function createCard({
       ));
       const actions = document.createElement('div');
       actions.className = 'stia-actions stia-actions--fill';
-      actions.append(button('重试', 'stia-button--danger-soft', () => {
+      actions.append(button('重试', 'stia-button--primary stia-card__act-main', () => {
         onGenerate(tag, 'manual', { requireIdle: true });
       }, '↻'));
-      if (canAdjust) actions.append(button('调整后重绘', '', adjustRegenerate, '✎'));
-      actions.append(...recoveryButtons(recovery));
-      if (onRemove) actions.append(removeButton());
+      if (canAdjust) actions.append(button('调整后重绘', 'stia-card__act-adjust', adjustRegenerate, '✎'));
+      actions.append(...moreActions([
+        onOpenSettings && button('换 Key / 预设', 'stia-button--ghost', onOpenSettings, '⚙'),
+        ...recoveryButtons(recovery),
+        onRemove && removeButton(),
+      ]));
       body.append(actions, details());
       root.append(body);
       renderedBody = body;
@@ -442,12 +471,11 @@ export function createCard({
     }
     const actions = document.createElement('div');
     actions.className = 'stia-actions stia-actions--fill';
-    actions.append(button(attempt ? '重新生成' : '生成图片', 'stia-button--primary', () => {
+    actions.append(button(attempt ? '重新生成' : '生成图片', 'stia-button--primary stia-card__act-main', () => {
       onGenerate(tag, 'manual', { requireIdle: true });
     }, '▧'));
-    actions.append(...recoveryButtons(recovery));
-    if (onRemove) actions.append(removeButton());
-    if (canAdjust && attempt) actions.append(button('调整后重绘', '', adjustRegenerate, '✎'));
+    if (canAdjust && attempt) actions.append(button('调整后重绘', 'stia-card__act-adjust', adjustRegenerate, '✎'));
+    actions.append(...moreActions([...recoveryButtons(recovery), onRemove && removeButton()]));
     body.append(details(), actions);
     root.append(body);
     renderedBody = body;

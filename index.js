@@ -80,8 +80,11 @@ let promptOverrideDialog;
 const actions = {
   generate,
   // Both only touch pictures that already exist: nothing is generated or billed.
-  canImportOriginal: () => api.mode() === 'direct' && store.state.settings.generationProvider !== 'novelai',
-  canRecover: () => api.mode() === 'direct' && store.state.settings.generationProvider !== 'novelai'
+  // Shown only to people who switched them on (设置 → 行为): most never need them.
+  canImportOriginal: () => store.state.settings.showRecoveryTools === true
+    && api.mode() === 'direct' && store.state.settings.generationProvider !== 'novelai',
+  canRecover: () => store.state.settings.showRecoveryTools === true
+    && api.mode() === 'direct' && store.state.settings.generationProvider !== 'novelai'
     && isFluxPortPreset(store.state.preset),
   recover: tag => {
     const taskId = window.prompt('粘贴流港「使用记录 → 详情」里的请求 ID（imgtask_ 开头）。只读取已生成的图片，不会重新生图；'

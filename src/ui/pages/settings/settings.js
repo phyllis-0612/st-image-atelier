@@ -116,11 +116,23 @@ export function createToolPanel({ api, store, notify }) {
   close.setAttribute('aria-label', '关闭');
   header.append(heading, health, close);
 
+  // One row of tabs: four settings pages, then the gallery.
   const tabs = document.createElement('nav');
   tabs.className = 'stia-tabs';
-  const settingsTab = action('设置', () => showTab('settings'), true);
-  const galleryTab = action('画廊', () => showTab('gallery'));
-  tabs.append(settingsTab, galleryTab);
+  tabs.setAttribute('aria-label', '画笺页面');
+  const tabButtons = new Map();
+  const panes = new Map();
+  for (const [id, label] of [['api', '接口'], ['image', '画面'], ['behavior', '行为'], ['maintenance', '维护'], ['gallery', '画廊']]) {
+    const tab = action(label, () => showTab(id));
+    tabButtons.set(id, tab);
+    tabs.append(tab);
+    if (id === 'gallery') continue;
+    const pane = document.createElement('div');
+    pane.className = 'stia-pane';
+    pane.dataset.pane = id;
+    panes.set(id, pane);
+  }
+  let currentPane = 'api';
 
   const settingsPage = document.createElement('section');
   settingsPage.className = 'stia-settings-page';
@@ -130,6 +142,7 @@ export function createToolPanel({ api, store, notify }) {
   const enabled = input('checkbox');
   const autoGenerate = input('checkbox');
   const enablePromptOverrideRegenerate = input('checkbox');
+  const showRecoveryTools = input('checkbox');
   const enableSmartRetry = input('checkbox');
   const keepWaitingOnTimeout = input('checkbox');
   const enableBackupPreset = input('checkbox');
@@ -403,6 +416,14 @@ export function createToolPanel({ api, store, notify }) {
       'enablePromptOverrideRegenerate',
       '临时修改提示词后重绘已开启',
       '临时修改提示词后重绘已关闭',
+    );
+  });
+  showRecoveryTools.addEventListener('change', () => {
+    void persistBooleanSetting(
+      showRecoveryTools,
+      'showRecoveryTools',
+      '卡片已显示「找回流港图片」和「导入原图」',
+      '卡片已隐藏「找回流港图片」和「导入原图」',
     );
   });
   enableSmartRetry.addEventListener('change', () => {
@@ -953,14 +974,11 @@ export function createToolPanel({ api, store, notify }) {
   clearKey.setAttribute('aria-label', '清除当前预设密钥');
   clearKey.classList.add('stia-button--danger-soft', 'stia-button--compact');
 
-  const pageHeading = document.createElement('div');
-  pageHeading.className = 'stia-page-heading';
-  const pageTitle = document.createElement('div');
-  pageTitle.className = 'stia-page-title';
-  pageTitle.innerHTML = '<span aria-hidden="true">⚙</span><strong>设置</strong>';
   const enabledField = field('扩展已启用', enabled);
-  enabledField.classList.add('stia-switch-field');
-  pageHeading.append(pageTitle, enabledField);
+  enabledField.classList.add('stia-switch-field', 'stia-switch-field--row');
+  const enabledDescription = document.createElement('small');
+  enabledDescription.textContent = '关闭后不再识别画图标签，已有图片不受影响';
+  enabledField.querySelector('span')?.append(enabledDescription);
 
   const engineSwitch = document.createElement('div');
   engineSwitch.className = 'stia-engine-switch';
@@ -1169,13 +1187,25 @@ export function createToolPanel({ api, store, notify }) {
   const backupDescription = document.createElement('small');
   backupDescription.textContent = '默认关闭，仅适用于 GPT 免服务端直连。超过下方等待时长后，自动用备用预设再发一次，并弹出酒馆提示；主请求继续等待，两边回图都会保存。每个主任务只触发一次，备用任务不再触发备用；会产生额外生图请求。启用时主请求会继续等图，不受超时中断开关影响';
   backupField.querySelector('span')?.append(backupDescription);
-  automationSection.append(autoField, promptOverrideField, smartRetryField, waitingField,
+  const automationTitle = document.createElement('h3');
+  automationTitle.textContent = '生成行为';
+  automationSection.append(automationTitle, enabledField, autoField, promptOverrideField, smartRetryField, waitingField,
     backupField, field('备用 API 预设', backupPresetSelector), field('备用生成等待时长（秒）', backupWaitSeconds));
+
+  const cardSection = document.createElement('section');
+  cardSection.className = 'stia-section stia-section--compact';
+  const cardTitle = document.createElement('h3');
+  cardTitle.textContent = '卡片与外观';
+  const recoveryField = field('卡片显示找回图片和导入原图', showRecoveryTools);
+  recoveryField.classList.add('stia-switch-field', 'stia-switch-field--row');
+  const recoveryDescription = document.createElement('small');
+  recoveryDescription.textContent = '默认关闭。打开后，免服务端直连的卡片「更多」里会出现「导入原图」，流港预设还会出现「找回流港图片」；两者都不会重新生图';
+  recoveryField.querySelector('span')?.append(recoveryDescription);
 
   const appearanceSection = document.createElement('section');
   appearanceSection.className = 'stia-section';
   const appearanceTitle = document.createElement('h3');
-  appearanceTitle.innerHTML = '<span aria-hidden="true">◐</span> 界面与画廊';
+  appearanceTitle.textContent = '画廊与聊天维护';
   const themeField = field('界面主题', themeMode);
   const themeHint = document.createElement('small');
   themeHint.className = 'stia-muted';
@@ -1270,9 +1300,9 @@ export function createToolPanel({ api, store, notify }) {
   const slimHint = document.createElement('small');
   slimHint.className = 'stia-muted';
   slimHint.textContent = '把本聊天楼层和滑动分支中的旧生图记录转入独立画廊文件，只保留轻量引用；完成后只保存一次聊天。可重复执行。';
+  cardSection.append(cardTitle, recoveryField, themeField);
   appearanceSection.append(
     appearanceTitle,
-    themeField,
     cleanupHeading,
     retentionGrid,
     cleanupNotice,
@@ -1319,6 +1349,9 @@ export function createToolPanel({ api, store, notify }) {
     generationSection.hidden = isNovelAi;
     advanced.hidden = isNovelAi;
     novelAiSection.hidden = !isNovelAi;
+    // NovelAI keeps its image options beside its connection settings, so 画面 has nothing to show.
+    tabButtons.get('image').hidden = isNovelAi;
+    if (isNovelAi && currentPane === 'image' && !overlay.hidden) showTab('api');
     openAiEngine.classList.toggle('stia-button--primary', !isNovelAi);
     novelAiEngine.classList.toggle('stia-button--primary', isNovelAi);
     openAiEngine.setAttribute('aria-pressed', String(!isNovelAi));
@@ -1368,17 +1401,11 @@ export function createToolPanel({ api, store, notify }) {
   });
   novelAiModel.addEventListener('change', syncNovelAiModelControls);
 
-  settingsPage.append(
-    pageHeading,
-    engineSwitch,
-    apiSection,
-    generationSection,
-    novelAiSection,
-    automationSection,
-    appearanceSection,
-    advanced,
-    status,
-  );
+  panes.get('api').append(engineSwitch, apiSection, novelAiSection, advanced);
+  panes.get('image').append(generationSection);
+  panes.get('behavior').append(automationSection, cardSection);
+  panes.get('maintenance').append(appearanceSection);
+  settingsPage.append(...panes.values(), status);
 
   async function saveSettings() {
     const saveControl = generationProvider.value === 'novelai' ? saveNovelAi : save;
@@ -1468,6 +1495,7 @@ export function createToolPanel({ api, store, notify }) {
       enabled.checked = settings.enabled;
       autoGenerate.checked = settings.autoGenerate;
       enablePromptOverrideRegenerate.checked = settings.enablePromptOverrideRegenerate === true;
+      showRecoveryTools.checked = settings.showRecoveryTools === true;
       enableSmartRetry.checked = settings.enableSmartRetry === true;
       keepWaitingOnTimeout.checked = settings.keepWaitingOnTimeout !== false;
       const backupOptions = normalizeBackupSettings(settings);
@@ -1521,13 +1549,20 @@ export function createToolPanel({ api, store, notify }) {
     syncBackupControls();
   });
 
+  // 'settings' is the entry other code asks for (tool menu, "换 Key / 预设"): it opens the API page.
   function showTab(name) {
-    const isSettings = name === 'settings';
-    settingsPage.hidden = !isSettings;
-    gallery.root.hidden = isSettings;
-    settingsTab.classList.toggle('stia-button--primary', isSettings);
-    galleryTab.classList.toggle('stia-button--primary', !isSettings);
-    if (!isSettings) void gallery.load({ reset: true });
+    let target = name === 'settings' ? 'api' : name;
+    if (!tabButtons.has(target) || tabButtons.get(target).hidden) target = 'api';
+    currentPane = target;
+    const isGallery = target === 'gallery';
+    settingsPage.hidden = isGallery;
+    gallery.root.hidden = !isGallery;
+    for (const [id, pane] of panes) pane.hidden = id !== target;
+    for (const [id, tab] of tabButtons) {
+      tab.classList.toggle('stia-button--primary', id === target);
+      tab.setAttribute('aria-pressed', String(id === target));
+    }
+    if (isGallery) void gallery.load({ reset: true });
   }
 
   function show(tabName = 'settings') {

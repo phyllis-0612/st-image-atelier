@@ -103,8 +103,26 @@ test('总开关即时持久化，独立保存生图参数后立即更新当前�
   panel.show();
 
   await waitFor(() => store.state.preset?.id === 'default', '设置面板未完成初始化');
+  const tabs = [...document.querySelectorAll('.stia-tabs button')];
+  assert.deepEqual(tabs.map(tab => tab.textContent), ['接口', '画面', '行为', '维护', '画廊']);
+  for (const [label, pane] of [['画面', 'image'], ['行为', 'behavior'], ['维护', 'maintenance'], ['接口', 'api']]) {
+    tabs.find(tab => tab.textContent === label).click();
+    assert.deepEqual([...document.querySelectorAll('.stia-pane')].filter(el => !el.hidden).map(el => el.dataset.pane), [pane]);
+  }
+  tabs.find(tab => tab.textContent === '画廊').click();
+  assert.equal(document.querySelector('.stia-settings-page').hidden, true);
+  panel.show('settings');
+  assert.equal(document.querySelector('[data-pane="api"]').hidden, false);
   const labels = () => [...document.querySelectorAll('.stia-settings-page label')];
   const controlFor = text => labels().find(label => label.textContent.includes(text))?.querySelector('input, select');
+
+  const recovery = controlFor('卡片显示找回图片和导入原图');
+  assert.equal(recovery.checked, false);
+  recovery.checked = true;
+  recovery.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  await waitFor(() => settingsPatches.some(patch => patch.showRecoveryTools === true), '找回工具开关没有保存');
+  await panel.load();
+  assert.equal(recovery.checked, true);
 
   const enabled = controlFor('扩展已启用');
   enabled.checked = false;
@@ -137,9 +155,13 @@ test('总开关即时持久化，独立保存生图参数后立即更新当前�
   assert.equal(backupPreset.value, 'backup');
   assert.equal(store.state.preset.id, 'default');
 
-  const size = controlFor('默认尺寸');
-  const quality = controlFor('默认质量');
-  const count = controlFor('默认数量');
+  // GPT and NovelAI both have size/count controls; target the GPT image page explicitly.
+  panel.show('image');
+  const imageControlFor = text => [...document.querySelectorAll('[data-pane="image"] label')]
+    .find(label => label.textContent.includes(text))?.querySelector('input, select');
+  const size = imageControlFor('默认尺寸');
+  const quality = imageControlFor('默认质量');
+  const count = imageControlFor('默认数量');
   size.value = '512x768';
   quality.value = 'high';
   count.value = '2';

@@ -1,8 +1,8 @@
 export const THEME_MODES = Object.freeze(['tavern', 'light', 'dark']);
 
 export const THEME_PALETTES = Object.freeze({
-  light: Object.freeze({ input: '#ffffff', inputText: '#261f24' }),
-  dark: Object.freeze({ input: '#111318', inputText: '#f4f4f6' }),
+  light: Object.freeze({ input: '#ffffff', inputText: '#16211e' }),
+  dark: Object.freeze({ input: '#0d1112', inputText: '#e9eeec' }),
 });
 
 export function normalizeThemeMode(value) {

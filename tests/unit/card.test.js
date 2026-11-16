@@ -147,3 +147,73 @@ test('生成中和已出图的卡片不提供「删除」，没传 onRemove 时�
   const noHandler = cardWith({ attempts: [{ status: 'failed' }], results: [] }, undefined);
   assert.equal(findButton(noHandler.card.root, '删除'), undefined);
 });
+
+function extrasCard(state, options = {}) {
+  const tag = { tagId: 'tag-1', prompt: 'adult woman', ratio: 'portrait' };
+  const card = createCard({
+    tag,
+    api: { fileUrl: id => `/file/${id}` },
+    getState: () => state,
+    onGenerate: () => {},
+    onOpenGallery: () => {},
+    onCancel: () => {},
+    ...options,
+  });
+  card.render();
+  return card;
+}
+
+test('次要操作多于一个时收进「更多」，默认收起，点一下展开；只有一个时直接显示', t => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { createElement: tagName => new ClickableElement(tagName) };
+  t.after(() => { globalThis.document = previousDocument; });
+  const failed = { attempts: [{ status: 'failed', errorMessage: 'HTTP 451' }], results: [] };
+  const tools = { onRecover: () => {}, canRecover: () => true, onImportOriginal: () => {}, canImportOriginal: () => true };
+
+  const full = extrasCard(failed, { ...tools, onRemove: () => {}, onOpenSettings: () => {} });
+  const list = allElements(full.root).find(item => item.className === 'stia-card__more-list');
+  assert.equal(list.hidden, true);
+  assert.deepEqual(list.children.map(item => item.children.at(-1).textContent), ['换 Key / 预设', '找回流港图片', '导入原图', '删除']);
+  const toggle = findButton(full.root, '更多');
+  toggle.handlers.click();
+  assert.equal(list.hidden, false);
+  assert.equal(toggle.attributes.get('aria-expanded'), 'true');
+  toggle.handlers.click();
+  assert.equal(list.hidden, true);
+
+  // 默认设置下没有找回和导入：待生成卡片只剩「删除」，不值得再套一层菜单。
+  const single = extrasCard({ attempts: [], results: [] }, { onRemove: () => {} });
+  assert.equal(findButton(single.root, '更多'), undefined);
+  assert.ok(findButton(single.root, '删除'));
+  const none = extrasCard({ attempts: [], results: [] });
+  assert.equal(findButton(none.root, '更多'), undefined);
+});
+
+test('已出图卡片：翻页和状态同一行，尺寸并入参数行，找回与导入只在开启时出现', t => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { createElement: tagName => new ClickableElement(tagName) };
+  t.after(() => { globalThis.document = previousDocument; });
+  const state = {
+    tag: { latestResultId: 'r2', resultIds: ['r1', 'r2'] },
+    attempts: [{ attemptId: 'a2', status: 'succeeded', parameters: { size: '1024x1536' } }],
+    results: [
+      { resultId: 'r1', status: 'available', attemptId: 'a1', parameters: { size: '1024x1536' } },
+      { resultId: 'r2', status: 'available', attemptId: 'a2', parameters: { size: '1024x1536' } },
+    ],
+  };
+  const byClass = (root, name) => allElements(root).find(item => item.className === name);
+  const plain = extrasCard(state);
+  const completion = byClass(plain.root, 'stia-card__completion');
+  assert.deepEqual(completion.children.map(item => item.className), ['stia-card__done', 'stia-card__pagination']);
+  assert.equal(byClass(plain.root, 'stia-card__metadata').children[0].className, 'stia-card__history');
+  assert.equal(findButton(plain.root, '找回流港图片'), undefined);
+  assert.equal(findButton(plain.root, '导入原图'), undefined);
+  assert.equal(findButton(plain.root, '更多'), undefined);
+
+  const withTools = extrasCard(state, {
+    onRecover: () => {}, canRecover: () => true, onImportOriginal: () => {}, canImportOriginal: () => true,
+  });
+  assert.ok(findButton(withTools.root, '更多'));
+  assert.ok(findButton(withTools.root, '找回流港图片'));
+  assert.ok(findButton(withTools.root, '导入原图'));
+});

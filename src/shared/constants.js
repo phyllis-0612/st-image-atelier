@@ -44,6 +44,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
   autoGenerate: false,
   enablePromptOverrideRegenerate: false,
+  showRecoveryTools: false,
   enableSmartRetry: false,
   keepWaitingOnTimeout: true,
   enableBackupPreset: false,

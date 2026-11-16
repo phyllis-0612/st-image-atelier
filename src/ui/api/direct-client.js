@@ -129,6 +129,7 @@ function normalizeSettings(value = {}) {
     generationProvider: merged.generationProvider === 'novelai' ? 'novelai' : 'openai',
     executionMode: merged.executionMode === 'server' ? 'server' : 'direct',
     themeMode: normalizeThemeMode(merged.themeMode),
+    showRecoveryTools: merged.showRecoveryTools === true,
     ...normalizeRetentionSettings(merged),
     ...normalizeBackupSettings(merged),
   };
